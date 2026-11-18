@@ -31,3 +31,20 @@ If anything in the plan is unclear, or you find that a design decision in it mus
 - Commit all work directly to `staging` and push it there. No pull requests, and no other branches.
 - Leave `master` (the default branch) alone: never commit to it, merge into it, rebase it, or push to it.
 - If you're on `master` when you start, check out `staging` before doing anything else.
+
+## Comments
+
+The default is no comment. Doc comments (`///` and `//!`) count as comments: public items don't get docs just for being public.
+
+A comment stays only when it clears a high bar on one of these:
+- The code is genuinely unintuitive and the comment is load-bearing: an ordering requirement (the new cursor bookmark is created before the old one is destroyed), a quirk of ZFS, Windows or a crate being worked around, an early `drop` that releases a lock, handle or buffer on purpose, a constraint another module or crate relies on.
+- It aids comprehension far beyond its length: a `//!` module header describing an algorithm, a state machine or an on-disk or on-wire layout, or a legend for a struct's fields or an enum's variants where the names alone don't carry it.
+- It explains a magic number: where the value comes from (a measurement, a spec, a format's or an API's limit), not what the constant is called.
+
+One kind of comment is mandatory: every `unsafe` block and `unsafe impl` carries a `// SAFETY:` comment stating why its invariants hold, and every `unsafe fn` has a `# Safety` section stating what callers must uphold. This matters most in `strata-drv`.
+
+A comment that reading the code makes redundant goes, however true it is: restating a name, a type or a value, describing what the next lines plainly do, summarizing a short function, or repeating a comment elsewhere.
+
+Write comments to be understood first by a future AI agent with zero context, then by humans. State facts and causes plainly, name the concrete thing (the function, the ZFS, kernel or Windows behavior, the measured figure and its conditions), and keep long explanations on their own lines above the code rather than trailing it. Avoid Claudisms, especially abstraction agency: code doesn't "know", "want", "decide" or "take care of" anything. Write "a session whose `base_gen` is behind the server's resends its change set", not "so the session knows to resend".
+
+When code changes, update or delete the comments it affects: a wrong comment is worse than none.
