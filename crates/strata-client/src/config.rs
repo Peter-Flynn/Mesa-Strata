@@ -145,10 +145,9 @@ mod tests {
         .unwrap();
         c.validate().unwrap();
         assert!(c.sources["home"].create_snapshots);
-        let bad: ClientConfig = serde_json::from_str(
-            r#"{"server":"b:7420","name":"nas2","sources":{"home":{"dataset":"rpool/home"}}}"#,
-        )
-        .unwrap();
+        let bad: ClientConfig =
+            serde_json::from_str(r#"{"server":"b:7420","name":"nas2","sources":{"home":{"dataset":"rpool/home"}}}"#)
+                .unwrap();
         assert!(bad.validate().is_err());
     }
 }

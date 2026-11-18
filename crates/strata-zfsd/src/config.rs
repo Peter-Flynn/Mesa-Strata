@@ -111,7 +111,8 @@ impl ServerConfig {
 
     pub fn read_server_id(&self) -> anyhow::Result<ServerId> {
         let p = self.server_id_path();
-        let t = std::fs::read_to_string(&p).with_context(|| format!("reading {} (has strata-init run?)", p.display()))?;
+        let t =
+            std::fs::read_to_string(&p).with_context(|| format!("reading {} (has strata-init run?)", p.display()))?;
         strata_proto::kdf::parse_server_id(&t).map_err(anyhow::Error::msg)
     }
 

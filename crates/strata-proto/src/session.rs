@@ -350,7 +350,14 @@ pub struct MsgReader {
 impl MsgReader {
     /// A reader over plaintext frames from any byte source (fuzzing, tests).
     pub fn plain(r: impl Read + Send + 'static) -> MsgReader {
-        let fr = FrameReader { stream: Box::new(r), cipher: Cipher::Plain, nonce: 0, plain: Vec::new(), pos: 0, frame: Vec::new() };
+        let fr = FrameReader {
+            stream: Box::new(r),
+            cipher: Cipher::Plain,
+            nonce: 0,
+            plain: Vec::new(),
+            pos: 0,
+            frame: Vec::new(),
+        };
         MsgReader { fr, batch: Vec::new(), enc: Vec::new(), pos: 0, unzstd: None }
     }
 

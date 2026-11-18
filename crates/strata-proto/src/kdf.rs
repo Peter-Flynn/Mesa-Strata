@@ -15,9 +15,7 @@ pub fn derive_key(password: &[u8], server_id: &ServerId, client: &str) -> Derive
     let mut salt = server_id.to_vec();
     salt.extend_from_slice(client.as_bytes());
     let mut out = [0u8; 32];
-    argon
-        .hash_password_into(password, &salt, &mut out)
-        .expect("argon2 with valid params");
+    argon.hash_password_into(password, &salt, &mut out).expect("argon2 with valid params");
     out
 }
 
@@ -27,9 +25,7 @@ pub fn encode_key(key: &DerivedKey) -> String {
 
 pub fn parse_key(text: &str) -> Result<DerivedKey, String> {
     let bytes = hex::decode(text.trim()).map_err(|e| format!("key is not hex: {e}"))?;
-    bytes
-        .try_into()
-        .map_err(|_| "key must be 32 bytes (64 hex digits)".to_string())
+    bytes.try_into().map_err(|_| "key must be 32 bytes (64 hex digits)".to_string())
 }
 
 pub fn encode_server_id(id: &ServerId) -> String {
@@ -38,9 +34,7 @@ pub fn encode_server_id(id: &ServerId) -> String {
 
 pub fn parse_server_id(text: &str) -> Result<ServerId, String> {
     let bytes = hex::decode(text.trim()).map_err(|e| format!("server id is not hex: {e}"))?;
-    bytes
-        .try_into()
-        .map_err(|_| "server id must be 16 bytes (32 hex digits)".to_string())
+    bytes.try_into().map_err(|_| "server id must be 16 bytes (32 hex digits)".to_string())
 }
 
 /// A password file holds the password itself; a trailing newline from `echo` or an editor

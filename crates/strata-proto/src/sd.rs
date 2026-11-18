@@ -6,10 +6,8 @@ const SD_LISTEN_FDS_START: i32 = 3;
 /// `LISTEN_FDS`, descriptors from 3 upward) and clears those variables so children don't
 /// inherit them.
 pub fn listen_fds() -> Vec<OwnedFd> {
-    let pid_ok = std::env::var("LISTEN_PID")
-        .ok()
-        .and_then(|p| p.parse::<u32>().ok())
-        .is_some_and(|p| p == std::process::id());
+    let pid_ok =
+        std::env::var("LISTEN_PID").ok().and_then(|p| p.parse::<u32>().ok()).is_some_and(|p| p == std::process::id());
     let n = std::env::var("LISTEN_FDS").ok().and_then(|n| n.parse::<i32>().ok()).unwrap_or(0);
     // SAFETY: remove_var is unsound only while another thread reads the environment; this
     // runs at the top of main, before any thread is spawned.

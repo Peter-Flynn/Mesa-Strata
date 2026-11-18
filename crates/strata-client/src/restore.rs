@@ -29,7 +29,8 @@ pub fn sources_table(net: &NetClient) -> anyhow::Result<String> {
     let _ = writeln!(out, "{:<16} {:<8} {:>5}  NEWEST", "SOURCE", "KIND", "SNAPS");
     for r in net.list(&CReq::ListSources)? {
         if let CResp::Source { name, kind, snapshots, newest } = r {
-            let newest = newest.map(|n| format!("{} ({})", n.name, utc_readable(n.unix_time))).unwrap_or_else(|| "-".into());
+            let newest =
+                newest.map(|n| format!("{} ({})", n.name, utc_readable(n.unix_time))).unwrap_or_else(|| "-".into());
             let _ = writeln!(out, "{name:<16} {:<8} {snapshots:>5}  {newest}", format!("{kind:?}"));
         }
     }
@@ -40,7 +41,8 @@ pub fn snapshots_table(snaps: &[SnapshotInfo]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{:<34} {:>6} {:<22} {:>14}", "SNAPSHOT", "GEN", "TIME", "USED");
     for s in snaps {
-        let _ = writeln!(out, "{:<34} {:>6} {:<22} {:>14}", s.name, s.generation, utc_readable(s.unix_time), s.used_bytes);
+        let _ =
+            writeln!(out, "{:<34} {:>6} {:<22} {:>14}", s.name, s.generation, utc_readable(s.unix_time), s.used_bytes);
     }
     out
 }
@@ -83,7 +85,10 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
     if o.replace && zfs.exists(ds)? {
         let kids = zfs.children(ds)?;
         if !kids.is_empty() {
-            bail!("{ds} has child datasets ({}); --replace would move them along with it. Restore into a separate --target instead", kids.join(", "));
+            bail!(
+                "{ds} has child datasets ({}); --replace would move them along with it. Restore into a separate --target instead",
+                kids.join(", ")
+            );
         }
     }
     let mut base = None;
@@ -138,7 +143,8 @@ fn receive(
         log::info!("restoring incrementally from {loc} (= server {})", srv.name);
     }
     // A raw stream arrives encrypted with its key unloaded, so it can't be mounted yet.
-    let opts = RecvOpts { resumable: false, no_mount: src.raw, props: Vec::new(), origin: base.as_ref().map(|b| b.1.clone()) };
+    let opts =
+        RecvOpts { resumable: false, no_mount: src.raw, props: Vec::new(), origin: base.as_ref().map(|b| b.1.clone()) };
     let rx = zfs.receive(target, &opts)?;
     net.send(
         &CReq::Restore {
@@ -261,7 +267,9 @@ fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<(
             failed.push(format!("{k}={v} ({e})"));
         }
     }
-    eprintln!("the previous contents of {ds} are in {old} (canmount=noauto); delete it with `zfs destroy -r {old}` once you no longer need it");
+    eprintln!(
+        "the previous contents of {ds} are in {old} (canmount=noauto); delete it with `zfs destroy -r {old}` once you no longer need it"
+    );
     if !failed.is_empty() {
         bail!("{ds} was replaced, but these properties could not be carried over: {}", failed.join(", "));
     }

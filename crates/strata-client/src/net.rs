@@ -101,7 +101,10 @@ pub fn serve(local: LocalSock, settings: Option<Settings>) -> anyhow::Result<()>
             CReq::ListSources => match remote(s.call(&Msg::ListSources))? {
                 Msg::Sources(v) => {
                     for i in v {
-                        reply(&local, CResp::Source { name: i.name, kind: i.kind, snapshots: i.snapshots, newest: i.newest })?;
+                        reply(
+                            &local,
+                            CResp::Source { name: i.name, kind: i.kind, snapshots: i.snapshots, newest: i.newest },
+                        )?;
                     }
                     reply(&local, CResp::ListEnd)?;
                 }
@@ -188,7 +191,9 @@ pub fn serve(local: LocalSock, settings: Option<Settings>) -> anyhow::Result<()>
 
 fn ready(r: Msg) -> CResp {
     match r {
-        Msg::Ready { server_gen, head, resume } => CResp::Ready { server_gen, head: head.map(|h| (h.name, h.guid)), resume },
+        Msg::Ready { server_gen, head, resume } => {
+            CResp::Ready { server_gen, head: head.map(|h| (h.name, h.guid)), resume }
+        }
         other => msg_to_resp(other),
     }
 }

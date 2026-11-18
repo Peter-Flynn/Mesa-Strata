@@ -139,8 +139,14 @@ pub trait Zfs: Send + Sync {
     fn destroy_bookmarks(&self, bookmarks: &[String]) -> Result<()>;
     /// Writes a send stream of `snap` (incremental from `from`, a snapshot or bookmark) to
     /// `out`, resuming at `(object, offset)` when given.
-    fn send(&self, snap: &str, from: Option<&str>, flags: SendFlags, resume: Option<(u64, u64)>, out: OwnedFd)
-    -> Result<Job>;
+    fn send(
+        &self,
+        snap: &str,
+        from: Option<&str>,
+        flags: SendFlags,
+        resume: Option<(u64, u64)>,
+        out: OwnedFd,
+    ) -> Result<Job>;
     fn receive(&self, target: &str, opts: &RecvOpts) -> Result<Receiving>;
     /// `zfs receive -A`: discards a partially received stream.
     fn receive_abort(&self, ds: &str) -> Result<()>;

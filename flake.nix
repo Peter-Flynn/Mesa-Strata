@@ -33,6 +33,7 @@
         {
           package = self.packages.${system}.strata;
           clippy = pkgs.callPackage ./nix/clippy.nix { };
+          fmt = pkgs.callPackage ./nix/fmt.nix { };
           vm-backup-restore = vmTest ./nix/tests/backup-restore.nix;
           vm-crash-resume = vmTest ./nix/tests/crash-resume.nix;
         }

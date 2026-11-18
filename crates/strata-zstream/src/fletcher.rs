@@ -31,7 +31,6 @@ impl Fletcher4 {
         }
         out
     }
-
 }
 
 #[cfg(test)]

@@ -144,11 +144,7 @@ impl State {
     }
     fn snap_mut(&mut self, full: &str) -> Result<&mut FSnap> {
         let (ds, s) = full.split_once('@').ok_or_else(|| ZfsError::Failed(format!("not a snapshot: {full}")))?;
-        self.ds_mut(ds)?
-            .snaps
-            .iter_mut()
-            .find(|x| x.name == s)
-            .ok_or_else(|| ZfsError::NotFound(full.into()))
+        self.ds_mut(ds)?.snaps.iter_mut().find(|x| x.name == s).ok_or_else(|| ZfsError::NotFound(full.into()))
     }
     /// guid and createtxg of a snapshot or bookmark name.
     fn base(&self, name: &str) -> Result<(u64, u64)> {
@@ -262,7 +258,9 @@ impl Fake {
 
     /// Content of a dataset or `ds@snap`, as object id → bytes.
     pub fn content(&self, name: &str) -> Result<BTreeMap<u64, Vec<u8>>> {
-        let objs = self.with(|st| Ok(if name.contains('@') { st.snap(name)?.objects.clone() } else { st.ds(name)?.objects.clone() }))?;
+        let objs = self.with(|st| {
+            Ok(if name.contains('@') { st.snap(name)?.objects.clone() } else { st.ds(name)?.objects.clone() })
+        })?;
         objs.iter().map(|(k, o)| Ok((*k, self.blob(&o.blob)?))).collect()
     }
 
@@ -288,7 +286,14 @@ impl Fake {
     }
 }
 
-fn gen_stream(fake: &Fake, st: &State, snap: &str, from: Option<&str>, flags: SendFlags, resume: Option<(u64, u64)>) -> Result<Vec<u8>> {
+fn gen_stream(
+    fake: &Fake,
+    st: &State,
+    snap: &str,
+    from: Option<&str>,
+    flags: SendFlags,
+    resume: Option<(u64, u64)>,
+) -> Result<Vec<u8>> {
     let s = st.snap(snap)?;
     let (ds, _) = snap.split_once('@').unwrap();
     let kind = st.ds(ds)?.kind;
@@ -449,7 +454,8 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
     let toguid = u64_at(&first, 40);
     let feat = features(u64_at(&first, 16));
     let resuming = feat & FEATURE_RESUMING != 0;
-    let toname = String::from_utf8_lossy(&first[56..56 + first[56..].iter().position(|&c| c == 0).unwrap_or(0)]).into_owned();
+    let toname =
+        String::from_utf8_lossy(&first[56..56 + first[56..].iter().position(|&c| c == 0).unwrap_or(0)]).into_owned();
     let snapname = snapname.unwrap_or_else(|| toname.split_once('@').map(|x| x.1.to_string()).unwrap_or_default());
     let kind = if u32_at(&first, 32) == DMU_OST_ZVOL { DsType::Volume } else { DsType::Filesystem };
 
@@ -463,7 +469,13 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
             if p.toguid != toguid || p.fromguid != fromguid {
                 return Err(ZfsError::Failed("receive: resume stream does not match the partial state".into()));
             }
-            return Ok((p.objects.clone(), p.tombs.clone(), p.lengths.clone(), (p.resume_object, p.resume_offset), p.bytes));
+            return Ok((
+                p.objects.clone(),
+                p.tombs.clone(),
+                p.lengths.clone(),
+                (p.resume_object, p.resume_offset),
+                p.bytes,
+            ));
         }
         if st.datasets.get(&ds).is_some_and(|d| d.partial.is_some()) {
             return Err(ZfsError::Failed(format!(
@@ -488,9 +500,7 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
             let d = st.ds(&ds)?;
             let last = d.snaps.last().ok_or_else(|| ZfsError::Failed(format!("{ds}: no snapshot to receive onto")))?;
             if last.guid != fromguid {
-                return Err(ZfsError::Failed(format!(
-                    "{ds}: most recent snapshot does not match incremental source"
-                )));
+                return Err(ZfsError::Failed(format!("{ds}: most recent snapshot does not match incremental source")));
             }
             (last.objects.clone(), last.tombs.clone())
         };
@@ -588,7 +598,8 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
                 (k, o)
             })
             .collect();
-        let tombs: BTreeMap<u64, u64> = tombs.into_iter().map(|(k, t)| (k, if t == txg_hint { txg } else { t })).collect();
+        let tombs: BTreeMap<u64, u64> =
+            tombs.into_iter().map(|(k, t)| (k, if t == txg_hint { txg } else { t })).collect();
         d.partial = None;
         d.created_by_partial = false;
         d.objects = objects.clone();
@@ -710,7 +721,8 @@ impl Zfs for Fake {
 
     fn set_props(&self, target: &str, props: &[(&str, &str)]) -> Result<()> {
         self.with(|st| {
-            let map = if target.contains('@') { &mut st.snap_mut(target)?.props } else { &mut st.ds_mut(target)?.props };
+            let map =
+                if target.contains('@') { &mut st.snap_mut(target)?.props } else { &mut st.ds_mut(target)?.props };
             for (k, v) in props {
                 map.insert(k.to_string(), v.to_string());
             }
@@ -813,7 +825,8 @@ impl Zfs for Fake {
         self.with(|st| {
             let s = st.snap(snap)?;
             let (guid, txg) = (s.guid, s.createtxg);
-            let (ds, b) = bookmark.split_once('#').ok_or_else(|| ZfsError::Failed(format!("not a bookmark: {bookmark}")))?;
+            let (ds, b) =
+                bookmark.split_once('#').ok_or_else(|| ZfsError::Failed(format!("not a bookmark: {bookmark}")))?;
             if snap.split_once('@').unwrap().0 != ds {
                 return Err(ZfsError::Failed("bookmark must be in the snapshot's dataset".into()));
             }
@@ -839,7 +852,14 @@ impl Zfs for Fake {
         })
     }
 
-    fn send(&self, snap: &str, from: Option<&str>, flags: SendFlags, resume: Option<(u64, u64)>, out: OwnedFd) -> Result<Job> {
+    fn send(
+        &self,
+        snap: &str,
+        from: Option<&str>,
+        flags: SendFlags,
+        resume: Option<(u64, u64)>,
+        out: OwnedFd,
+    ) -> Result<Job> {
         let stream = self.with(|st| gen_stream(self, st, snap, from, flags, resume))?;
         Ok(Job::Thread(std::thread::spawn(move || {
             let mut f = File::from(out);
@@ -959,7 +979,13 @@ impl Zfs for Fake {
 
     fn local_props(&self, ds: &str) -> Result<Vec<(String, String)>> {
         self.with(|st| {
-            Ok(st.ds(ds)?.props.iter().filter(|(k, _)| !k.starts_with("fake:")).map(|(k, v)| (k.clone(), v.clone())).collect())
+            Ok(st
+                .ds(ds)?
+                .props
+                .iter()
+                .filter(|(k, _)| !k.starts_with("fake:"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect())
         })
     }
 

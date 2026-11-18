@@ -109,7 +109,19 @@ impl Zfs for Real {
     }
 
     fn bookmarks(&self, ds: &str) -> Result<Vec<Bookmark>> {
-        let out = self.run(&["list", "-Hp", "-t", "bookmark", "-d", "1", "-s", "createtxg", "-o", "name,guid,createtxg", ds])?;
+        let out = self.run(&[
+            "list",
+            "-Hp",
+            "-t",
+            "bookmark",
+            "-d",
+            "1",
+            "-s",
+            "createtxg",
+            "-o",
+            "name,guid,createtxg",
+            ds,
+        ])?;
         let mut v = Vec::new();
         for line in out.lines() {
             let f: Vec<&str> = line.split('\t').collect();
@@ -118,7 +130,11 @@ impl Zfs for Real {
             }
             let Some((parent, name)) = f[0].split_once('#') else { continue };
             if parent == ds {
-                v.push(Bookmark { name: name.to_string(), guid: num("guid", f[1])?, createtxg: num("createtxg", f[2])? });
+                v.push(Bookmark {
+                    name: name.to_string(),
+                    guid: num("guid", f[1])?,
+                    createtxg: num("createtxg", f[2])?,
+                });
             }
         }
         Ok(v)
@@ -191,7 +207,14 @@ impl Zfs for Real {
         lzc::destroy_bookmarks(bookmarks)
     }
 
-    fn send(&self, snap: &str, from: Option<&str>, flags: SendFlags, resume: Option<(u64, u64)>, out: OwnedFd) -> Result<Job> {
+    fn send(
+        &self,
+        snap: &str,
+        from: Option<&str>,
+        flags: SendFlags,
+        resume: Option<(u64, u64)>,
+        out: OwnedFd,
+    ) -> Result<Job> {
         let snap = snap.to_string();
         let from = from.map(str::to_string);
         Ok(Job::Thread(std::thread::spawn(move || {
@@ -261,11 +284,7 @@ impl Zfs for Real {
 
     fn local_props(&self, ds: &str) -> Result<Vec<(String, String)>> {
         let out = self.run(&["get", "-Hp", "-s", "local", "-o", "property,value", "all", ds])?;
-        Ok(out
-            .lines()
-            .filter_map(|l| l.split_once('\t'))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect())
+        Ok(out.lines().filter_map(|l| l.split_once('\t')).map(|(k, v)| (k.to_string(), v.to_string())).collect())
     }
 
     fn destroy_recursive(&self, ds: &str) -> Result<()> {

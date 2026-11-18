@@ -263,7 +263,14 @@ mod imp {
         // SAFETY: s and f are NUL-terminated and outlive the call; out is an open
         // descriptor borrowed for the call's duration.
         let rc = unsafe {
-            lzc_send_resume(s.as_ptr(), f.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()), out.as_raw_fd(), fl, obj, off)
+            lzc_send_resume(
+                s.as_ptr(),
+                f.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                out.as_raw_fd(),
+                fl,
+                obj,
+                off,
+            )
         };
         if rc != 0 {
             return Err(errno_err(&format!("send {snap}"), rc));

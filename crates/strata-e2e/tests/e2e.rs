@@ -145,7 +145,12 @@ impl World {
         let key = strata_proto::kdf::derive_key(PASSWORD, &scfg.read_server_id()?, "nas");
         std::fs::write(w.path("nas.key"), strata_proto::kdf::encode_key(&key))?;
         std::fs::write(w.path("nas.password"), PASSWORD)?;
-        w.write_client_cfg("nas.json", "nas", serde_json::json!({"keyFile": w.path("nas.key")}), serde_json::json!({}))?;
+        w.write_client_cfg(
+            "nas.json",
+            "nas",
+            serde_json::json!({"keyFile": w.path("nas.key")}),
+            serde_json::json!({}),
+        )?;
         w.start_acceptor(listener);
         w.start_zfsd()?;
         Ok(w)
@@ -160,7 +165,13 @@ impl World {
         Ok(())
     }
 
-    fn write_client_cfg(&self, file: &str, name: &str, auth: serde_json::Value, extra_sources: serde_json::Value) -> anyhow::Result<()> {
+    fn write_client_cfg(
+        &self,
+        file: &str,
+        name: &str,
+        auth: serde_json::Value,
+        extra_sources: serde_json::Value,
+    ) -> anyhow::Result<()> {
         let mut c = serde_json::json!({
             "server": format!("127.0.0.1:{}", self.port),
             "name": name,
@@ -242,7 +253,11 @@ impl World {
             .args(args)
             .stdin(Stdio::null())
             .output()?;
-        Ok((out.status, String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned()))
+        Ok((
+            out.status,
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
     }
 
     fn backup(&self) -> anyhow::Result<String> {
@@ -322,7 +337,8 @@ impl World {
 
     /// Restores `snapshot` over rpool/home through a fresh target, which records a rebase.
     fn replace_with(&self, snapshot: &str, target: &str) -> anyhow::Result<()> {
-        let (st, _, err) = self.client_cmd("nas.json", &["restore", "home", snapshot, "--target", target, "--replace"])?;
+        let (st, _, err) =
+            self.client_cmd("nas.json", &["restore", "home", snapshot, "--target", target, "--replace"])?;
         ensure!(st.success(), "restore --replace {snapshot}: {err}");
         Ok(())
     }
@@ -338,7 +354,8 @@ impl Drop for World {
 
 fn fill(z: &Fake, ds: &str, seed: u8, objects: u64, size: usize) -> anyhow::Result<()> {
     for o in 0..objects {
-        let data: Vec<u8> = (0..size).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed).wrapping_add(o as u8)).collect();
+        let data: Vec<u8> =
+            (0..size).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed).wrapping_add(o as u8)).collect();
         z.write_object(ds, o + 1, &data)?;
     }
     Ok(())
@@ -368,10 +385,20 @@ fn t_full_then_incremental() -> anyhow::Result<()> {
 fn t_password_and_wrong_password() -> anyhow::Result<()> {
     let w = World::new()?;
     fill(&w.client, "rpool/home", 2, 2, 1000)?;
-    w.write_client_cfg("pw.json", "nas", serde_json::json!({"passwordFile": w.path("nas.password")}), serde_json::json!({}))?;
+    w.write_client_cfg(
+        "pw.json",
+        "nas",
+        serde_json::json!({"passwordFile": w.path("nas.password")}),
+        serde_json::json!({}),
+    )?;
     w.backup_as("pw.json", "home")?;
     std::fs::write(w.path("bad.password"), b"wrong")?;
-    w.write_client_cfg("bad.json", "nas", serde_json::json!({"passwordFile": w.path("bad.password")}), serde_json::json!({}))?;
+    w.write_client_cfg(
+        "bad.json",
+        "nas",
+        serde_json::json!({"passwordFile": w.path("bad.password")}),
+        serde_json::json!({}),
+    )?;
     let (st, _, err) = w.client_cmd("bad.json", &["backup", "home"])?;
     ensure!(!st.success() && err.contains("authentication failed"), "wrong password: {err}");
     let (st, _, err) = w.client_cmd("bad.json", &["backup", "home"])?;
@@ -385,16 +412,31 @@ fn t_insecure_clients() -> anyhow::Result<()> {
     let w = World::new()?;
     w.client.create("rpool/lab", &[])?;
     fill(&w.client, "rpool/lab", 3, 2, 1000)?;
-    w.write_client_cfg("lab.json", "lab", serde_json::json!({"insecure": true}), serde_json::json!({"labdata": {"dataset": "rpool/lab"}}))?;
+    w.write_client_cfg(
+        "lab.json",
+        "lab",
+        serde_json::json!({"insecure": true}),
+        serde_json::json!({"labdata": {"dataset": "rpool/lab"}}),
+    )?;
     w.backup_as("lab.json", "labdata")?;
     ensure!(w.server.exists("tank/strata/lab/ds/labdata")?);
-    w.write_client_cfg("far.json", "far", serde_json::json!({"insecure": true}), serde_json::json!({"labdata": {"dataset": "rpool/lab"}}))?;
+    w.write_client_cfg(
+        "far.json",
+        "far",
+        serde_json::json!({"insecure": true}),
+        serde_json::json!({"labdata": {"dataset": "rpool/lab"}}),
+    )?;
     let (st, _, err) = w.client_cmd("far.json", &["backup", "labdata"])?;
     ensure!(!st.success() && err.contains("AddressNotAllowed"), "far: {err}");
     w.write_client_cfg("mismatch.json", "nas", serde_json::json!({"insecure": true}), serde_json::json!({}))?;
     let (st, _, err) = w.client_cmd("mismatch.json", &["backup", "home"])?;
     ensure!(!st.success() && err.contains("AuthModeMismatch"), "mismatch: {err}");
-    w.write_client_cfg("lab-psk.json", "lab", serde_json::json!({"keyFile": w.path("nas.key")}), serde_json::json!({}))?;
+    w.write_client_cfg(
+        "lab-psk.json",
+        "lab",
+        serde_json::json!({"keyFile": w.path("nas.key")}),
+        serde_json::json!({}),
+    )?;
     let (st, _, err) = w.client_cmd("lab-psk.json", &["backup", "home"])?;
     ensure!(!st.success() && err.contains("AuthModeMismatch"), "lab with psk: {err}");
     Ok(())
@@ -407,7 +449,8 @@ fn t_retention() -> anyhow::Result<()> {
         w.backup()?;
     }
     let snaps = w.server_snaps()?;
-    let gens: Vec<u64> = snaps.iter().map(|s| strata_proto::names::parse_server_snapshot_name(&s.name).unwrap()).collect();
+    let gens: Vec<u64> =
+        snaps.iter().map(|s| strata_proto::names::parse_server_snapshot_name(&s.name).unwrap()).collect();
     // The dailies window keeps the newest snapshot of today too, which is already among
     // the three newest.
     ensure!(gens == vec![3, 4, 5], "kept generations {gens:?}");
@@ -444,7 +487,10 @@ fn t_snapshot_pattern() -> anyhow::Result<()> {
     ensure!(st.success(), "restore: {err}");
     ensure!(out.trim() == "rpool/home-r");
     let origin = w.client.get_prop("rpool/home-r", "origin")?;
-    ensure!(origin.as_deref() == Some("rpool/home@autosnap_1_hourly"), "expected an incremental restore, origin {origin:?}: {err}");
+    ensure!(
+        origin.as_deref() == Some("rpool/home@autosnap_1_hourly"),
+        "expected an incremental restore, origin {origin:?}: {err}"
+    );
     ensure!(w.client.content("rpool/home-r")? == w.client.content("rpool/home@autosnap_2_hourly")?);
     Ok(())
 }
@@ -463,24 +509,30 @@ fn t_restore_full_and_replace() -> anyhow::Result<()> {
 
     w.client.set_props("rpool/home", &[("mountpoint", "/srv/home"), ("com.example:tag", "kept")])?;
     w.client.create("rpool/home/child", &[])?;
-    let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home2", "--replace"])?;
+    let (st, _, err) =
+        w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home2", "--replace"])?;
     ensure!(!st.success() && err.contains("child datasets"), "children must refuse: {err}");
     ensure!(!w.client.exists("rpool/home2")?, "nothing restored when refused");
     w.client.destroy_recursive("rpool/home/child")?;
 
     w.client.set_props("rpool/home", &[("fake:busy", "on")])?;
-    let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home3", "--replace"])?;
+    let (st, _, err) =
+        w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home3", "--replace"])?;
     ensure!(!st.success() && err.contains("nothing was changed"), "busy must refuse: {err}");
     ensure!(w.client.content("rpool/home")?[&1] == b"oops", "original untouched");
     ensure!(w.client.get_prop("rpool/home", "canmount")?.is_none(), "canmount untouched");
     ensure!(w.client.exists("rpool/home3")?, "restored copy left for the user");
     w.client.set_props("rpool/home", &[("fake:busy", "off")])?;
 
-    let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home2", "--replace"])?;
+    let (st, _, err) =
+        w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home2", "--replace"])?;
     ensure!(st.success(), "replace: {err}");
     ensure!(w.client.content("rpool/home")? == before);
     ensure!(w.client.get_prop("rpool/home", "mountpoint")?.as_deref() == Some("/srv/home"), "mountpoint carried over");
-    ensure!(w.client.get_prop("rpool/home", "com.example:tag")?.as_deref() == Some("kept"), "user property carried over");
+    ensure!(
+        w.client.get_prop("rpool/home", "com.example:tag")?.as_deref() == Some("kept"),
+        "user property carried over"
+    );
     let olds: Vec<String> = w.client.children("rpool")?.into_iter().filter(|c| c.contains("-strata-old-")).collect();
     ensure!(olds.len() == 1, "old copy kept: {olds:?}");
     ensure!(w.client.get_prop(&olds[0], "canmount")?.as_deref() == Some("noauto"), "old copy can't automount");
@@ -623,7 +675,8 @@ fn t_crash_inside_replace() -> anyhow::Result<()> {
         w.client.write_object("rpool/home", 1, b"newer")?;
         w.backup()?;
         w.set_env(&[("STRATA_FAULT", point)])?;
-        let (st, _, _) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", &format!("rpool/rb{i}"), "--replace"])?;
+        let (st, _, _) =
+            w.client_cmd("nas.json", &["restore", "home", &first, "--target", &format!("rpool/rb{i}"), "--replace"])?;
         ensure!(!st.success(), "restore should have died at {point}");
         w.power_cut();
         w.set_env(&[])?;
@@ -671,7 +724,10 @@ fn t_rebase_after_replace() -> anyhow::Result<()> {
     w.client.write_object("rpool/home", 3, b"g7")?;
     w.backup()?;
     w.check_converged()?;
-    ensure!(!w.server.exists("tank/strata/nas/ds/home")?, "abandoned branch's dataset destroyed once its snapshots were pruned");
+    ensure!(
+        !w.server.exists("tank/strata/nas/ds/home")?,
+        "abandoned branch's dataset destroyed once its snapshots were pruned"
+    );
     let (st, out, err) = w.client_cmd("nas.json", &["sources"])?;
     ensure!(st.success() && out.matches("home").count() == 1, "sources: {out}{err}");
     let latest = w.server_snaps()?.last().unwrap().name.clone();
@@ -680,7 +736,10 @@ fn t_rebase_after_replace() -> anyhow::Result<()> {
     ensure!(w.client.content("rpool/check")? == w.client.content("rpool/home")?);
 
     w.replace_with(&latest, "rpool/rb-head")?;
-    ensure!(w.server.get_prop("tank/strata/nas/ds", "strata:rebase:home")?.is_none(), "rebase onto the head is a no-op");
+    ensure!(
+        w.server.get_prop("tank/strata/nas/ds", "strata:rebase:home")?.is_none(),
+        "rebase onto the head is a no-op"
+    );
     w.client.write_object("rpool/home", 4, b"g8")?;
     w.backup()?;
     w.check_converged()?;

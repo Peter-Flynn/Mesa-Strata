@@ -129,7 +129,13 @@ impl SourceSet {
         for m in &self.members {
             if let Some(t) = zfs.get_prop(m, "receive_resume_token")? {
                 let t = ResumeToken::decode(&t).map_err(|e| anyhow::anyhow!("{m}: unreadable resume token: {e}"))?;
-                let r = ResumePoint { fromguid: t.fromguid, toguid: t.toguid, object: t.object, offset: t.offset, raw: t.rawok };
+                let r = ResumePoint {
+                    fromguid: t.fromguid,
+                    toguid: t.toguid,
+                    object: t.object,
+                    offset: t.offset,
+                    raw: t.rawok,
+                };
                 return Ok(Some((m.clone(), r)));
             }
         }
@@ -325,7 +331,13 @@ mod tests {
         }
         z.clone_snapshot("p/a@2", "p/b").unwrap();
         z.snapshot(&["p/b@4".into()], &[]).unwrap();
-        let g = |f: &str| z.snapshots(f.split('@').next().unwrap(), &[]).unwrap().into_iter().find(|s| f.ends_with(&format!("@{}", s.name))).unwrap();
+        let g = |f: &str| {
+            z.snapshots(f.split('@').next().unwrap(), &[])
+                .unwrap()
+                .into_iter()
+                .find(|s| f.ends_with(&format!("@{}", s.name)))
+                .unwrap()
+        };
         let b4 = g("p/b@4");
         assert!(is_ancestor(&z, "p/b", b4.createtxg, g("p/a@2").guid).unwrap());
         assert!(is_ancestor(&z, "p/b", b4.createtxg, g("p/a@1").guid).unwrap());

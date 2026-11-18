@@ -156,10 +156,7 @@ impl Validator {
             return invalid("stream has no toguid");
         }
         if fromguid != self.expect.fromguid {
-            return invalid(format!(
-                "stream is based on guid {fromguid:#x}, expected {:#x}",
-                self.expect.fromguid
-            ));
+            return invalid(format!("stream is based on guid {fromguid:#x}, expected {:#x}", self.expect.fromguid));
         }
         if let Some(t) = self.expect.toguid
             && t != toguid
@@ -179,14 +176,7 @@ impl Validator {
         if feat & FEATURE_RESUMING != 0 && u32_at(h, 4) == 0 {
             return invalid("resuming stream without a resume point");
         }
-        self.summary = Some(Summary {
-            toguid,
-            fromguid,
-            toname,
-            features: feat,
-            objset_type,
-            resume: None,
-        });
+        self.summary = Some(Summary { toguid, fromguid, toname, features: feat, objset_type, resume: None });
         Ok(())
     }
 

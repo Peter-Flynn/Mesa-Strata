@@ -153,7 +153,9 @@ impl CResp {
             CResp::Ok => Enc::new(1).finish(),
             CResp::Ready { server_gen, head, resume } => {
                 let mut e = Enc::new(2);
-                e.u64(*server_gen).opt_str(head.as_ref().map(|h| h.0.as_str()), SNAP_MAX).u64(head.as_ref().map_or(0, |h| h.1));
+                e.u64(*server_gen)
+                    .opt_str(head.as_ref().map(|h| h.0.as_str()), SNAP_MAX)
+                    .u64(head.as_ref().map_or(0, |h| h.1));
                 put_resume(&mut e, resume.as_ref());
                 e.finish()
             }

@@ -28,8 +28,8 @@ use strata_zfs::{Job, RecvOpts, SendFlags, Zfs};
 use crate::auth::{Backoff, Key, peer_of};
 use crate::config::ServerConfig;
 use crate::ops::{
-    SourceSet, finalize_head, finalize_rebase, full, is_ancestor, kind_matches, kind_of, member_source, prune, set_rebase,
-    sibling, snapshot_info,
+    SourceSet, finalize_head, finalize_rebase, full, is_ancestor, kind_matches, kind_of, member_source, prune,
+    set_rebase, sibling, snapshot_info,
 };
 
 const BUSY_RETRY_MS: u32 = 30_000;
@@ -55,8 +55,20 @@ impl Drop for Slot {
 }
 
 impl Server {
-    pub fn new(cfg: ServerConfig, zfs: Arc<dyn Zfs>, keys: BTreeMap<String, DerivedKey>, server_id: ServerId) -> Arc<Server> {
-        Arc::new(Server { cfg, zfs, keys, server_id, slots: Mutex::new(HashSet::new()), backoff: Mutex::new(Backoff::default()) })
+    pub fn new(
+        cfg: ServerConfig,
+        zfs: Arc<dyn Zfs>,
+        keys: BTreeMap<String, DerivedKey>,
+        server_id: ServerId,
+    ) -> Arc<Server> {
+        Arc::new(Server {
+            cfg,
+            zfs,
+            keys,
+            server_id,
+            slots: Mutex::new(HashSet::new()),
+            backoff: Mutex::new(Backoff::default()),
+        })
     }
 
     fn acquire(self: &Arc<Server>, client: &str, source: &str) -> Option<Slot> {
@@ -412,7 +424,12 @@ impl Conn {
         let zfs = &*self.srv.zfs;
         match zfs.exists(&set.client_ds) {
             Ok(true) => {}
-            Ok(false) => return err(ErrorCode::NotFound, format!("no dataset tree for client {client}; strata-init creates it")),
+            Ok(false) => {
+                return err(
+                    ErrorCode::NotFound,
+                    format!("no dataset tree for client {client}; strata-init creates it"),
+                );
+            }
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         }
         if let Ok(Some(t)) = set.kind(zfs)
@@ -459,12 +476,8 @@ impl Conn {
         }
         let generation = b.generation + 1;
         let snap = server_snapshot_name(now(), generation);
-        let mut opts = RecvOpts {
-            resumable: true,
-            no_mount: true,
-            props: vec![("readonly".into(), "on".into())],
-            origin: None,
-        };
+        let mut opts =
+            RecvOpts { resumable: true, no_mount: true, props: vec![("readonly".into(), "on".into())], origin: None };
         let (target_ds, expected_fromguid) = match (&b.resume, &b.rebase_base, &b.head_ds) {
             (Some((ds, r)), _, _) => (ds.clone(), r.fromguid),
             (None, Some(base), _) => {
@@ -502,7 +515,11 @@ impl Conn {
         let gen_s = (b.generation + 1).to_string();
         let time_s = now().to_string();
         let interval_s = interval.map(|i| i.to_string());
-        let mut props = vec![("strata:gen", gen_s.as_str()), ("strata:time", time_s.as_str()), ("strata:source", b.source.as_str())];
+        let mut props = vec![
+            ("strata:gen", gen_s.as_str()),
+            ("strata:time", time_s.as_str()),
+            ("strata:source", b.source.as_str()),
+        ];
         if let Some(i) = &interval_s {
             props.push(("strata:interval", i));
         }
@@ -522,7 +539,9 @@ impl Conn {
         }
         fault::point("zfsd.commit.held");
         match prune(zfs, &set, self.srv.cfg.retention(&client), now()) {
-            Ok(gone) if !gone.is_empty() => log::info!("{client_ds}/{}: retention destroyed {}", b.source, gone.join(" ")),
+            Ok(gone) if !gone.is_empty() => {
+                log::info!("{client_ds}/{}: retention destroyed {}", b.source, gone.join(" "))
+            }
             Ok(_) => {}
             Err(e) => log::warn!("{client_ds}/{}: retention: {e}", b.source),
         }

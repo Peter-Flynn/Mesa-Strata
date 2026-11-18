@@ -160,12 +160,7 @@ pub fn client_handshake(stream: TcpStream, auth: &ClientAuth, compress_threads: 
     stream.set_nodelay(true).ok();
     let mut s = &stream;
     let nonce_c = random16();
-    let hello = ClientHello {
-        version: PROTOCOL_VERSION,
-        client: auth.client.clone(),
-        auth: auth.mode,
-        nonce: nonce_c,
-    };
+    let hello = ClientHello { version: PROTOCOL_VERSION, client: auth.client.clone(), auth: auth.mode, nonce: nonce_c };
     let hello_bytes = send_hs(&mut s, &Hs::Hello(hello))?;
     let (reply, reply_bytes) = recv_hs(&mut s)?;
     let Hs::ServerHello(sh) = reply else {

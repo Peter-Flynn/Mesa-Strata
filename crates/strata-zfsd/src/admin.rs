@@ -84,7 +84,8 @@ pub fn status_table(st: &[SourceStatus], now: i64) -> String {
         } else {
             "ok"
         };
-        let _ = writeln!(s, "{:<16} {:<16} {:>5} {:<22} {:>12}  {state}", x.client, x.source, x.snapshots, newest, x.used);
+        let _ =
+            writeln!(s, "{:<16} {:<16} {:>5} {:<22} {:>12}  {state}", x.client, x.source, x.snapshots, newest, x.used);
     }
     s
 }
@@ -95,7 +96,11 @@ pub fn textfile(st: &[SourceStatus], now: i64) -> String {
     let _ = writeln!(s, "# TYPE strata_source_last_success_timestamp_seconds gauge");
     for x in st {
         if let Some((_, t)) = &x.newest {
-            let _ = writeln!(s, "strata_source_last_success_timestamp_seconds{{client=\"{}\",source=\"{}\"}} {t}", x.client, x.source);
+            let _ = writeln!(
+                s,
+                "strata_source_last_success_timestamp_seconds{{client=\"{}\",source=\"{}\"}} {t}",
+                x.client, x.source
+            );
         }
     }
     let _ = writeln!(s, "# TYPE strata_source_used_bytes gauge");
@@ -104,11 +109,18 @@ pub fn textfile(st: &[SourceStatus], now: i64) -> String {
     }
     let _ = writeln!(s, "# TYPE strata_source_snapshots gauge");
     for x in st {
-        let _ = writeln!(s, "strata_source_snapshots{{client=\"{}\",source=\"{}\"}} {}", x.client, x.source, x.snapshots);
+        let _ =
+            writeln!(s, "strata_source_snapshots{{client=\"{}\",source=\"{}\"}} {}", x.client, x.source, x.snapshots);
     }
     let _ = writeln!(s, "# TYPE strata_source_stale gauge");
     for x in st {
-        let _ = writeln!(s, "strata_source_stale{{client=\"{}\",source=\"{}\"}} {}", x.client, x.source, x.stale(now) as u8);
+        let _ = writeln!(
+            s,
+            "strata_source_stale{{client=\"{}\",source=\"{}\"}} {}",
+            x.client,
+            x.source,
+            x.stale(now) as u8
+        );
     }
     s
 }
@@ -175,7 +187,11 @@ pub fn forget(cfg: &ServerConfig, zfs: &dyn Zfs, target: &str, yes: bool) -> any
         bail!("{client_ds}/{source} does not exist");
     }
     if !yes {
-        eprint!("Destroy {} and all {} of its snapshots? Type the source name to confirm: ", set.members.join(", "), set.snaps.len());
+        eprint!(
+            "Destroy {} and all {} of its snapshots? Type the source name to confirm: ",
+            set.members.join(", "),
+            set.snaps.len()
+        );
         std::io::stderr().flush()?;
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line)?;

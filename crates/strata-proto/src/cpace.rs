@@ -79,9 +79,7 @@ fn scalar_mult(y: &Scalar, g: &RistrettoPoint) -> Element {
 }
 
 fn scalar_mult_vfy(y: &Scalar, x: &Element) -> Result<Element, CpaceError> {
-    let point = CompressedRistretto(*x)
-        .decompress()
-        .ok_or(CpaceError::InvalidElement)?;
+    let point = CompressedRistretto(*x).decompress().ok_or(CpaceError::InvalidElement)?;
     let k = scalar_mult(y, &point);
     if k == [0u8; 32] {
         return Err(CpaceError::InvalidElement);
@@ -122,11 +120,7 @@ impl Keys {
     }
 
     pub fn verify(&self, y: &Element, ad: &[u8], tag: &Tag) -> Result<(), CpaceError> {
-        if bool::from(self.tag(y, ad).ct_eq(tag)) {
-            Ok(())
-        } else {
-            Err(CpaceError::BadTag)
-        }
+        if bool::from(self.tag(y, ad).ct_eq(tag)) { Ok(()) } else { Err(CpaceError::BadTag) }
     }
 
     /// A key derived from ISK for a higher-level protocol, separated by `label`.
@@ -234,10 +228,7 @@ mod tests {
                2c57")
         );
         let g = calculate_generator(PRS, &h(CI), &h(SID));
-        assert_eq!(
-            g.compress().to_bytes(),
-            h32("222b6b195fe84b1652badb6f6a3ae3d24341e7306967f0b8115b40d5698c7e56")
-        );
+        assert_eq!(g.compress().to_bytes(), h32("222b6b195fe84b1652badb6f6a3ae3d24341e7306967f0b8115b40d5698c7e56"));
     }
 
     #[test]
@@ -258,9 +249,7 @@ mod tests {
 
     #[test]
     fn scalar_mult_vfy_vectors() {
-        let s = Scalar::from_bytes_mod_order(h32(
-            "7cd0e075fa7955ba52c02759a6c90dbbfc10e6d40aea8d283e407d88cf538a05",
-        ));
+        let s = Scalar::from_bytes_mod_order(h32("7cd0e075fa7955ba52c02759a6c90dbbfc10e6d40aea8d283e407d88cf538a05"));
         let x = h32("2c3c6b8c4f3800e7aef6864025b4ed79bd599117e427c41bd47d93d654b4a51c");
         assert_eq!(
             scalar_mult_vfy(&s, &x).unwrap(),

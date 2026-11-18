@@ -184,11 +184,9 @@ impl ZReq {
                 e.finish()
             }
             ZReq::Abort => Enc::new(11).finish(),
-            ZReq::BeginRestore { source, snapshot, from } => Enc::new(12)
-                .str(source, NAME_MAX)
-                .str(snapshot, SNAP_MAX)
-                .opt_str(from.as_deref(), SNAP_MAX)
-                .finish(),
+            ZReq::BeginRestore { source, snapshot, from } => {
+                Enc::new(12).str(source, NAME_MAX).str(snapshot, SNAP_MAX).opt_str(from.as_deref(), SNAP_MAX).finish()
+            }
             ZReq::RestoreStatus => Enc::new(13).finish(),
             ZReq::Rebase { source, snapshot } => Enc::new(14).str(source, NAME_MAX).str(snapshot, SNAP_MAX).finish(),
         }
@@ -198,7 +196,12 @@ impl ZReq {
         let mut d = Dec::new(buf);
         let r = match d.u16()? {
             1 => ZReq::Connect,
-            2 => ZReq::Hello { version: d.u16()?, client: d.str(NAME_MAX)?, auth: auth_from(d.u8()?)?, nonce: d.array()? },
+            2 => ZReq::Hello {
+                version: d.u16()?,
+                client: d.str(NAME_MAX)?,
+                auth: auth_from(d.u8()?)?,
+                nonce: d.array()?,
+            },
             3 => ZReq::CpaceA { ya: d.array()? },
             4 => ZReq::Confirm { ta: d.array()? },
             5 => ZReq::ListSources,
@@ -208,7 +211,9 @@ impl ZReq {
             9 => ZReq::StartReceive,
             10 => ZReq::Commit { generation: d.u64()?, interval_secs: get_opt_u64(&mut d)? },
             11 => ZReq::Abort,
-            12 => ZReq::BeginRestore { source: d.str(NAME_MAX)?, snapshot: d.str(SNAP_MAX)?, from: d.opt_str(SNAP_MAX)? },
+            12 => {
+                ZReq::BeginRestore { source: d.str(NAME_MAX)?, snapshot: d.str(SNAP_MAX)?, from: d.opt_str(SNAP_MAX)? }
+            }
             13 => ZReq::RestoreStatus,
             14 => ZReq::Rebase { source: d.str(NAME_MAX)?, snapshot: d.str(SNAP_MAX)? },
             _ => return Err(Malformed("unknown request tag")),
@@ -237,7 +242,9 @@ impl ZResp {
             ZResp::HelloOk { version, server_id, nonce, authenticated } => {
                 Enc::new(2).u16(*version).bytes(server_id).bytes(nonce).bool(*authenticated).finish()
             }
-            ZResp::Reject { reason, retry_after_ms } => Enc::new(3).u8(reason_to(*reason)).u32(*retry_after_ms).finish(),
+            ZResp::Reject { reason, retry_after_ms } => {
+                Enc::new(3).u8(reason_to(*reason)).u32(*retry_after_ms).finish()
+            }
             ZResp::CpaceB { yb, tb } => Enc::new(4).bytes(yb).bytes(tb).finish(),
             ZResp::Authenticated { psk } => Enc::new(5).bytes(psk).finish(),
             ZResp::Source { name, kind, snapshots, newest } => {
@@ -272,7 +279,9 @@ impl ZResp {
         let mut d = Dec::new(buf);
         let r = match d.u16()? {
             1 => ZResp::Ok,
-            2 => ZResp::HelloOk { version: d.u16()?, server_id: d.array()?, nonce: d.array()?, authenticated: d.bool()? },
+            2 => {
+                ZResp::HelloOk { version: d.u16()?, server_id: d.array()?, nonce: d.array()?, authenticated: d.bool()? }
+            }
             3 => ZResp::Reject { reason: reason_from(d.u8()?)?, retry_after_ms: d.u32()? },
             4 => ZResp::CpaceB { yb: d.array()?, tb: d.array()? },
             5 => ZResp::Authenticated { psk: d.array()? },

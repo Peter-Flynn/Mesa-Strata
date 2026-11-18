@@ -26,9 +26,7 @@ const COMPRESS_THREADS: usize = 2;
 const MIDSTREAM: u64 = 1 << 20;
 
 pub fn init_logging() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp(None)
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).format_timestamp(None).init();
 }
 
 struct Zfsd {
@@ -158,7 +156,11 @@ struct Backup {
 fn ready(s: &mut Session, r: ZResp) -> anyhow::Result<Option<Backup>> {
     match r {
         ZResp::Ready { server_gen, head, resume } => {
-            s.writer.send_now(&Msg::Ready { server_gen, head: head.map(|(name, guid)| HeadRef { name, guid }), resume })?;
+            s.writer.send_now(&Msg::Ready {
+                server_gen,
+                head: head.map(|(name, guid)| HeadRef { name, guid }),
+                resume,
+            })?;
             Ok(Some(Backup { resume_toguid: resume.map(|r| r.toguid), rx: None }))
         }
         other => {
@@ -223,7 +225,8 @@ fn session(mut s: Session, z: &Zfsd, client: &str) -> anyhow::Result<()> {
                     bail!("BeginBackup during a backup");
                 }
                 if !valid_name(&source) {
-                    s.writer.send_now(&Msg::Error { code: ErrorCode::BadRequest, message: "invalid source name".into() })?;
+                    s.writer
+                        .send_now(&Msg::Error { code: ErrorCode::BadRequest, message: "invalid source name".into() })?;
                     continue;
                 }
                 log::info!("{client}: backup of {source} requested");
@@ -263,9 +266,12 @@ fn session(mut s: Session, z: &Zfsd, client: &str) -> anyhow::Result<()> {
                     }
                 }
                 let rx = b.rx.as_mut().unwrap();
-                let res = rx.v.push(&data, &mut rx.out).map_err(|e| (ErrorCode::Validation, e.to_string())).and_then(|_| {
-                    rx.pipe.write_all(&rx.out).map_err(|e| (ErrorCode::Internal, format!("zfs receive stopped reading: {e}")))
-                });
+                let res =
+                    rx.v.push(&data, &mut rx.out).map_err(|e| (ErrorCode::Validation, e.to_string())).and_then(|_| {
+                        rx.pipe
+                            .write_all(&rx.out)
+                            .map_err(|e| (ErrorCode::Internal, format!("zfs receive stopped reading: {e}")))
+                    });
                 let before = rx.forwarded;
                 rx.forwarded += rx.out.len() as u64;
                 if before < MIDSTREAM && rx.forwarded >= MIDSTREAM {
@@ -357,7 +363,9 @@ fn session(mut s: Session, z: &Zfsd, client: &str) -> anyhow::Result<()> {
 /// in a state no client input has touched.
 pub fn serve(tcp: TcpStream, zfsd_socket: &Path) -> anyhow::Result<()> {
     let peer = tcp.peer_addr().ok();
-    let z = Zfsd { sock: LocalSock::connect(zfsd_socket).with_context(|| format!("connecting to {}", zfsd_socket.display()))? };
+    let z = Zfsd {
+        sock: LocalSock::connect(zfsd_socket).with_context(|| format!("connecting to {}", zfsd_socket.display()))?,
+    };
     let tcp_fd = OwnedFd::from(tcp.try_clone()?);
     match z.call_fd(&ZReq::Connect, Some(&tcp_fd))?.0 {
         ZResp::Ok => {}

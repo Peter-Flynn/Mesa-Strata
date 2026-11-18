@@ -66,7 +66,8 @@ fn main() -> anyhow::Result<()> {
             let cfg = ClientConfig::load(&args.config)?;
             let fd = fds.into_iter().next().context("no connection passed by systemd (Accept=yes)")?;
             let creds = std::env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
-            let auth = ClientAuth { client: cfg.name.clone(), mode: cfg.mode(), secret: cfg.read_secret(creds.as_deref())? };
+            let auth =
+                ClientAuth { client: cfg.name.clone(), mode: cfg.mode(), secret: cfg.read_secret(creds.as_deref())? };
             let settings = Settings { server: cfg.server.clone(), auth };
             serve(LocalSock::from_fd(fd), Some(settings))
         }

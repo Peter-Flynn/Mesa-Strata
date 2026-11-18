@@ -14,9 +14,7 @@ use strata_proto::local::LocalListener;
 use strata_zfs::Zfs;
 
 pub fn init_logging() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp(None)
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).format_timestamp(None).init();
 }
 
 pub fn run(cfg_path: &Path, zfs: Arc<dyn Zfs>) -> anyhow::Result<()> {

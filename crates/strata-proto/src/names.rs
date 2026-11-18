@@ -8,9 +8,7 @@ pub fn valid_name(name: &str) -> bool {
     !b.is_empty()
         && b.len() <= MAX_NAME
         && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
-        && b
-            .iter()
-            .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+        && b.iter().all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
 }
 
 pub fn check_name(what: &str, name: &str) -> Result<(), String> {

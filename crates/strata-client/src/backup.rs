@@ -46,7 +46,10 @@ pub fn own_snapshot_name(source: &str, unix: i64) -> String {
 fn is_own_snapshot(source: &str, name: &str) -> bool {
     match name.rsplit_once('_') {
         Some((prefix, stamp)) => {
-            prefix == format!("strata_{source}") && stamp.len() == 16 && stamp.ends_with('Z') && stamp.as_bytes()[8] == b'T'
+            prefix == format!("strata_{source}")
+                && stamp.len() == 16
+                && stamp.ends_with('Z')
+                && stamp.as_bytes()[8] == b'T'
         }
         None => false,
     }
@@ -261,7 +264,8 @@ pub fn backup(
                 }
                 _ => {
                     log::info!("{source}: the server's partial receive can't be resumed from here; discarding it");
-                    ready = expect_ready(net.call(&CReq::DiscardResume)?)?.context("server busy after DiscardResume")?;
+                    ready =
+                        expect_ready(net.call(&CReq::DiscardResume)?)?.context("server busy after DiscardResume")?;
                 }
             }
             continue;
@@ -321,7 +325,9 @@ mod tests {
                         f.read_to_end(&mut v).unwrap();
                         log.push(format!("streamed {} bytes", v.len()));
                     }
-                    CReq::StreamDone { .. } => reply(CResp::Committed { snapshot: "strata-20260101T000000Z-g1".into() }),
+                    CReq::StreamDone { .. } => {
+                        reply(CResp::Committed { snapshot: "strata-20260101T000000Z-g1".into() })
+                    }
                     _ => reply(CResp::Ok),
                 }
             }
