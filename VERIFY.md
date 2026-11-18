@@ -4,13 +4,13 @@ Checks the dev sandbox can't run. Each entry lists what it checks and why the sa
 
 ## Real-ZFS backup, restore and isolation
 
-Checks the whole dataset path on real OpenZFS 2.4.4: libzfs_core calls, `zfs allow` delegation (including `promote` for rebases), the systemd hardening and socket activation of zfsd, netd and both client halves, real `zfs send` streams through the validator (including raw encrypted ones), and volmode=none (no `/dev/zvol` nodes for received zvols). The sandbox has no KVM and no ZFS kernel module, so it runs these paths only against the fake ZFS.
+Checks the whole dataset path on real OpenZFS 2.4.4: libzfs_core calls (including retention destroying the rest when another tool holds one of its snapshots), `zfs allow` delegation (including `promote` for rebases), the systemd hardening and socket activation of zfsd, netd and both client halves, real `zfs send` streams through the validator (including raw encrypted ones), and volmode=none (no `/dev/zvol` nodes for received zvols). The sandbox has no KVM and no ZFS kernel module, so it runs these paths only against the fake ZFS.
 
 ```sh
 nix build -L .#checks.x86_64-linux.vm-backup-restore
 ```
 
-Expected: exit status 0, and the log shows every subtest finishing: tree and isolation properties, first backup is full, incrementals/holds/retention, zvol source, raw send, snapshotPattern mode, list and restore, replace (busy original refused, properties carried, original kept with canmount=noauto), server status, rebase onto an older snapshot (promoted `home.g<N>` sibling, abandoned dataset destroyed after pruning), privilege split, wrong password, insecure client.
+Expected: exit status 0, and the log shows every subtest finishing: tree and isolation properties, first backup is full, incrementals/holds/retention (the backup interval read from real `systemd-analyze` output), zvol source, raw send, snapshotPattern mode, list and restore, replace (busy original refused, properties carried, original kept with canmount=noauto), server status, rebase onto an older snapshot (promoted `home.g<N>` sibling, abandoned dataset destroyed after pruning), privilege split, wrong password, insecure client.
 
 Latest result: not run yet.
 

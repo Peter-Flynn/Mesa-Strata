@@ -324,12 +324,15 @@ impl Conn {
         one(ZResp::Authenticated { psk })
     }
 
-    fn source_set(&self, source: &str) -> Result<SourceSet, String> {
+    /// The outer error is a protocol violation (unauthenticated, bad name); the inner one
+    /// is a ZFS failure the client gets as an `Internal` error.
+    fn source_set(&self, source: &str) -> Result<Result<SourceSet, Reply>, String> {
         let client = self.authed()?;
         if !valid_name(source) {
             return Err(format!("invalid source name {source:?}"));
         }
-        SourceSet::load(&*self.srv.zfs, &self.srv.cfg.client_ds(client), source).map_err(|e| e.to_string())
+        Ok(SourceSet::load(&*self.srv.zfs, &self.srv.cfg.client_ds(client), source)
+            .map_err(|e| vec![(ZResp::error(ErrorCode::Internal, e.to_string()), None)]))
     }
 
     fn list_sources(&self) -> Result<Reply, String> {
@@ -368,9 +371,9 @@ impl Conn {
     }
 
     fn list_snapshots(&self, source: &str) -> Result<Reply, String> {
-        let set = match self.source_set(source) {
+        let set = match self.source_set(source)? {
             Ok(s) => s,
-            Err(e) => return err(ErrorCode::Internal, e),
+            Err(r) => return Ok(r),
         };
         if set.members.is_empty() {
             return err(ErrorCode::NotFound, format!("no source {source}"));
@@ -416,7 +419,10 @@ impl Conn {
     }
 
     fn begin_backup(&mut self, source: String, kind: SourceKind) -> Result<Reply, String> {
-        let set = self.source_set(&source)?;
+        let set = match self.source_set(&source)? {
+            Ok(s) => s,
+            Err(r) => return Ok(r),
+        };
         if self.backup.is_some() || self.restore.is_some() {
             return Err("a session is already open".into());
         }
@@ -552,7 +558,10 @@ impl Conn {
     }
 
     fn rebase(&mut self, source: &str, snapshot: &str) -> Result<Reply, String> {
-        let set = self.source_set(source)?;
+        let set = match self.source_set(source)? {
+            Ok(s) => s,
+            Err(r) => return Ok(r),
+        };
         if self.backup.is_some() || self.restore.is_some() {
             return Err("a session is already open".into());
         }
@@ -573,7 +582,10 @@ impl Conn {
     }
 
     fn begin_restore(&mut self, source: &str, snapshot: &str, from: Option<&str>) -> Result<Reply, String> {
-        let set = self.source_set(source)?;
+        let set = match self.source_set(source)? {
+            Ok(s) => s,
+            Err(r) => return Ok(r),
+        };
         if self.backup.is_some() || self.restore.is_some() {
             return Err("a session is already open".into());
         }

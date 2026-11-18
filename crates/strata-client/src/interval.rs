@@ -3,11 +3,13 @@
 
 use std::process::Command;
 
-/// Seconds from a `(in UTC): Tue 2026-11-17 14:15:00 UTC` line.
-fn parse_in_utc(line: &str) -> Option<i64> {
-    let rest = line.trim().strip_prefix("(in UTC):")?.trim();
-    let parts: Vec<&str> = rest.split_whitespace().collect();
-    let (date, time) = match parts.as_slice() {
+/// Seconds from a line such as `Next elapse: Tue 2026-11-17 14:15:00 UTC`.
+/// systemd-analyze prints each elapse in the local zone (`Next elapse:`, `Iteration #2:`)
+/// and repeats it on an `(in UTC):` line only when the local zone isn't UTC, so exactly one
+/// line per elapse ends in `UTC` either way.
+fn parse_utc_line(line: &str) -> Option<i64> {
+    let (_, rest) = line.split_once(": ")?;
+    let (date, time) = match rest.split_whitespace().collect::<Vec<_>>().as_slice() {
         [_, d, t, "UTC"] => (*d, *t),
         _ => return None,
     };
@@ -27,7 +29,7 @@ fn parse_in_utc(line: &str) -> Option<i64> {
 }
 
 pub fn parse_calendar_output(out: &str) -> Option<u64> {
-    let times: Vec<i64> = out.lines().filter_map(parse_in_utc).collect();
+    let times: Vec<i64> = out.lines().filter_map(parse_utc_line).collect();
     match times.as_slice() {
         [a, b, ..] if b > a => Some((b - a) as u64),
         _ => None,
@@ -45,9 +47,27 @@ mod tests {
 
     #[test]
     fn parses_systemd_analyze() {
-        let out = "  Original form: *:0/15\nNormalized form: *-*-* *:00/15:00\n    Next elapse: Tue 2026-11-17 14:15:00 UTC\n       (in UTC): Tue 2026-11-17 14:15:00 UTC\n       From now: 4min left\n       Iter. #2: Tue 2026-11-17 14:30:00 UTC\n       (in UTC): Tue 2026-11-17 14:30:00 UTC\n";
-        assert_eq!(parse_calendar_output(out), Some(900));
-        assert_eq!(parse_in_utc("(in UTC): Thu 1970-01-01 00:00:10 UTC"), Some(10));
-        assert_eq!(parse_in_utc("(in UTC): Tue 2026-11-17 12:34:56 UTC"), Some(1_794_918_896));
+        // Output of systemd 255 `systemd-analyze calendar --iterations=2 '*:0/15'` with the
+        // local zone set to UTC, then to Europe/Berlin.
+        let utc = "  Original form: *:0/15
+Normalized form: *-*-* *:00/15:00
+    Next elapse: Wed 2026-11-18 22:15:00 UTC
+       From now: 9min left
+   Iteration #2: Wed 2026-11-18 22:30:00 UTC
+       From now: 24min left
+";
+        let berlin = "  Original form: *:0/15
+Normalized form: *-*-* *:00/15:00
+    Next elapse: Wed 2026-11-18 23:15:00 CET
+       (in UTC): Wed 2026-11-18 22:15:00 UTC
+       From now: 9min left
+   Iteration #2: Wed 2026-11-18 23:30:00 CET
+       (in UTC): Wed 2026-11-18 22:30:00 UTC
+       From now: 24min left
+";
+        assert_eq!(parse_calendar_output(utc), Some(900));
+        assert_eq!(parse_calendar_output(berlin), Some(900));
+        assert_eq!(parse_utc_line("(in UTC): Thu 1970-01-01 00:00:10 UTC"), Some(10));
+        assert_eq!(parse_utc_line("Next elapse: Tue 2026-11-17 12:34:56 UTC"), Some(1_794_918_896));
     }
 }

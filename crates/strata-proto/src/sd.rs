@@ -4,7 +4,8 @@ const SD_LISTEN_FDS_START: i32 = 3;
 
 /// Takes the sockets systemd passed under the socket-activation protocol (`LISTEN_PID`,
 /// `LISTEN_FDS`, descriptors from 3 upward) and clears those variables so children don't
-/// inherit them.
+/// inherit them. systemd passes the descriptors without close-on-exec; like
+/// `sd_listen_fds`, this sets it, so `zfs` commands that zfsd runs don't inherit them.
 pub fn listen_fds() -> Vec<OwnedFd> {
     let pid_ok =
         std::env::var("LISTEN_PID").ok().and_then(|p| p.parse::<u32>().ok()).is_some_and(|p| p == std::process::id());
@@ -24,7 +25,9 @@ pub fn listen_fds() -> Vec<OwnedFd> {
             // SAFETY: under the socket-activation protocol systemd hands this process
             // ownership of descriptors 3..3+LISTEN_FDS, and nothing else in the process
             // has wrapped them yet because this is the only place that reads LISTEN_FDS.
-            unsafe { OwnedFd::from_raw_fd(SD_LISTEN_FDS_START + i) }
+            let fd = unsafe { OwnedFd::from_raw_fd(SD_LISTEN_FDS_START + i) };
+            let _ = rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC);
+            fd
         })
         .collect()
 }

@@ -39,6 +39,6 @@
         }
       );
 
-      formatter = forAll (system: pkgs: pkgs.nixfmt-rfc-style);
+      formatter = forAll (system: pkgs: pkgs.nixfmt);
     };
 }

@@ -24,8 +24,16 @@ impl Real {
         Real { zfs: zfs.into() }
     }
 
+    /// `run` classifies failures by the English text of zfs's messages, which gettext
+    /// translates under other locales.
+    fn command(&self) -> Command {
+        let mut c = Command::new(&self.zfs);
+        c.env("LC_ALL", "C");
+        c
+    }
+
     fn run(&self, args: &[&str]) -> Result<String> {
-        let out = Command::new(&self.zfs).args(args).stdin(Stdio::null()).output()?;
+        let out = self.command().args(args).stdin(Stdio::null()).output()?;
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
@@ -226,7 +234,7 @@ impl Zfs for Real {
 
     fn receive(&self, target: &str, opts: &RecvOpts) -> Result<Receiving> {
         let (r, w) = crate::pipe()?;
-        let mut cmd = Command::new(&self.zfs);
+        let mut cmd = self.command();
         cmd.arg("receive");
         if opts.resumable {
             cmd.arg("-s");

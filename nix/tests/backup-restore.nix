@@ -153,6 +153,13 @@ in
         assert held.count("strata-base") == 1 and snaps[-1] in held, held
         assert server.succeed(f"zfs get -H -o value strata:gen {snaps[-1]}").strip() == "5"
         assert server.succeed(f"zfs get -H -o value strata:interval {snaps[-1]}").strip() == "3600"
+        # A snapshot another tool holds outlives retention without stopping the rest of it.
+        server.succeed(f"zfs hold other {snaps[0]}")
+        for i in range(2):
+            client.succeed(f"echo held{i} >> /rpool/home/b", "systemctl start strata-backup@home.service")
+        after = server.succeed("zfs list -H -t snapshot -o name -s createtxg tank/strata/client/ds/home").split()
+        assert after[0] == snaps[0] and len(after) == 4 and after[-1].endswith("-g7"), after
+        server.succeed(f"zfs release other {snaps[0]}")
 
     with subtest("zvol source: received, but no device node on the server"):
         client.succeed("systemctl start strata-backup@vol.service")
