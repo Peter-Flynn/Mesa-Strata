@@ -72,7 +72,6 @@ pub enum ErrorCode {
     Internal,
 }
 
-/// Messages exchanged after the handshake.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Msg {
     ListSources,
@@ -121,7 +120,6 @@ pub enum Msg {
 }
 
 pub const MAX_MSG: usize = 1 << 20;
-/// Largest `ZfsChunk` payload a sender produces.
 pub const ZFS_CHUNK: usize = 256 * 1024;
 
 pub fn encode(msg: &Msg, out: &mut Vec<u8>) {

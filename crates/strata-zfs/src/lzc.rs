@@ -121,7 +121,6 @@ mod imp {
         }
     }
 
-    /// Runs an lzc call that may fill `errlist`, and returns the per-name errors from it.
     fn with_errlist(
         what: &str,
         f: impl FnOnce(*mut *mut nvlist_t) -> c_int,

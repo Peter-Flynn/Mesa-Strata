@@ -15,7 +15,6 @@ const FIRST_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(15 * 60);
 const MAX_ENTRIES: usize = 65_536;
 
-/// Exponential backoff after failed handshakes, per client name and per source address.
 #[derive(Default)]
 pub struct Backoff {
     entries: HashMap<Key, (u32, Instant)>,

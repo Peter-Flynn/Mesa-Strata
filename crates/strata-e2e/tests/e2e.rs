@@ -295,7 +295,6 @@ impl World {
         "tank/strata/nas/ds/home"
     }
 
-    /// Server snapshots of nas/home, oldest first.
     fn server_snaps(&self) -> anyhow::Result<Vec<strata_zfs::Snap>> {
         Ok(strata_zfsd::ops::strata_snaps(&self.server, self.server_ds())?)
     }
@@ -437,7 +436,8 @@ fn t_snapshot_pattern() -> anyhow::Result<()> {
     let (st, out, err) = w.client_cmd("pat.json", &["restore", "home", &head.name, "--target", "rpool/home-r"])?;
     ensure!(st.success(), "restore: {err}");
     ensure!(out.trim() == "rpool/home-r");
-    ensure!(err.contains("incrementally"), "expected an incremental restore: {err}");
+    let origin = w.client.get_prop("rpool/home-r", "origin")?;
+    ensure!(origin.as_deref() == Some("rpool/home@autosnap_1_hourly"), "expected an incremental restore, origin {origin:?}: {err}");
     ensure!(w.client.content("rpool/home-r")? == w.client.content("rpool/home@autosnap_2_hourly")?);
     Ok(())
 }

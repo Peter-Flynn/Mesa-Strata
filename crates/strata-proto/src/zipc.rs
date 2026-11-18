@@ -122,14 +122,32 @@ pub fn get_snapshot(d: &mut Dec) -> Result<SnapshotInfo, Malformed> {
         used_bytes: d.u64()?,
     })
 }
+const EMPTY_RESUME: ResumePoint = ResumePoint { fromguid: 0, toguid: 0, object: 0, offset: 0, raw: false };
+
+pub fn empty_snapshot() -> SnapshotInfo {
+    SnapshotInfo { name: String::new(), guid: 0, generation: 0, unix_time: 0, used_bytes: 0 }
+}
+
+/// Reads an optional snapshot written as a presence flag plus a full field; an absent
+/// one must be all zero, so every value has exactly one encoding.
+pub fn get_opt_snapshot(d: &mut Dec, present: bool) -> Result<Option<SnapshotInfo>, Malformed> {
+    let s = get_snapshot(d)?;
+    if !present && s != empty_snapshot() {
+        return Err(Malformed("absent snapshot with content"));
+    }
+    Ok(present.then_some(s))
+}
+
 pub fn put_resume(e: &mut Enc, r: Option<&ResumePoint>) {
-    let r0 = ResumePoint { fromguid: 0, toguid: 0, object: 0, offset: 0, raw: false };
-    let r = r.map(|r| (true, *r)).unwrap_or((false, r0));
+    let r = r.map(|r| (true, *r)).unwrap_or((false, EMPTY_RESUME));
     e.bool(r.0).u64(r.1.fromguid).u64(r.1.toguid).u64(r.1.object).u64(r.1.offset).bool(r.1.raw);
 }
 pub fn get_resume(d: &mut Dec) -> Result<Option<ResumePoint>, Malformed> {
     let present = d.bool()?;
     let r = ResumePoint { fromguid: d.u64()?, toguid: d.u64()?, object: d.u64()?, offset: d.u64()?, raw: d.bool()? };
+    if !present && r != EMPTY_RESUME {
+        return Err(Malformed("absent resume point with content"));
+    }
     Ok(present.then_some(r))
 }
 fn put_opt_u64(e: &mut Enc, v: Option<u64>) {
@@ -138,6 +156,9 @@ fn put_opt_u64(e: &mut Enc, v: Option<u64>) {
 fn get_opt_u64(d: &mut Dec) -> Result<Option<u64>, Malformed> {
     let p = d.bool()?;
     let v = d.u64()?;
+    if !p && v != 0 {
+        return Err(Malformed("absent number with content"));
+    }
     Ok(p.then_some(v))
 }
 
@@ -219,8 +240,7 @@ impl ZResp {
             ZResp::Source { name, kind, snapshots, newest } => {
                 let mut e = Enc::new(6);
                 e.str(name, NAME_MAX).u8(kind_to(*kind)).u32(*snapshots).bool(newest.is_some());
-                let empty = SnapshotInfo { name: String::new(), guid: 0, generation: 0, unix_time: 0, used_bytes: 0 };
-                put_snapshot(&mut e, newest.as_ref().unwrap_or(&empty));
+                put_snapshot(&mut e, newest.as_ref().unwrap_or(&empty_snapshot()));
                 e.finish()
             }
             ZResp::Snapshot(s) => {
@@ -258,8 +278,7 @@ impl ZResp {
                 let kind = kind_from(d.u8()?)?;
                 let snapshots = d.u32()?;
                 let has = d.bool()?;
-                let s = get_snapshot(&mut d)?;
-                ZResp::Source { name, kind, snapshots, newest: has.then_some(s) }
+                ZResp::Source { name, kind, snapshots, newest: get_opt_snapshot(&mut d, has)? }
             }
             7 => ZResp::Snapshot(get_snapshot(&mut d)?),
             8 => ZResp::ListEnd,
@@ -267,6 +286,9 @@ impl ZResp {
                 let server_gen = d.u64()?;
                 let name = d.opt_str(SNAP_MAX)?;
                 let guid = d.u64()?;
+                if name.is_none() && guid != 0 {
+                    return Err(Malformed("absent head with a guid"));
+                }
                 let resume = get_resume(&mut d)?;
                 ZResp::Ready { server_gen, head: name.map(|n| (n, guid)), resume }
             }

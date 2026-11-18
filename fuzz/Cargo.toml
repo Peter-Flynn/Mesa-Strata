@@ -1,0 +1,59 @@
+[package]
+name = "strata-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+postcard = { version = "1", features = ["alloc"] }
+strata-proto = { path = "../crates/strata-proto" }
+strata-zstream = { path = "../crates/strata-zstream" }
+strata-client = { path = "../crates/strata-client" }
+
+[workspace]
+
+[[bin]]
+name = "zstream_validate"
+path = "fuzz_targets/zstream_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nvlist"
+path = "fuzz_targets/nvlist.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resume_token"
+path = "fuzz_targets/resume_token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session_reader"
+path = "fuzz_targets/session_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake"
+path = "fuzz_targets/handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "local_ipc"
+path = "fuzz_targets/local_ipc.rs"
+test = false
+doc = false
+bench = false

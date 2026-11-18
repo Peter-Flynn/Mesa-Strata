@@ -19,7 +19,6 @@ pub fn init_logging() {
         .init();
 }
 
-/// Runs zfsd on the socket systemd passed, or on `cfg.socket` when started by hand.
 pub fn run(cfg_path: &Path, zfs: Arc<dyn Zfs>) -> anyhow::Result<()> {
     let cfg = config::ServerConfig::load(cfg_path)?;
     let listener = match strata_proto::sd::listen_fds().into_iter().next() {

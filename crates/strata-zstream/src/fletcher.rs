@@ -9,8 +9,8 @@ pub struct Fletcher4 {
 impl Fletcher4 {
     pub fn update(&mut self, data: &[u8]) {
         let [mut a, mut b, mut c, mut d] = self.w;
-        for chunk in data.chunks_exact(4) {
-            a = a.wrapping_add(u32::from_le_bytes(chunk.try_into().unwrap()) as u64);
+        for chunk in data.as_chunks::<4>().0 {
+            a = a.wrapping_add(u32::from_le_bytes(*chunk) as u64);
             b = b.wrapping_add(a);
             c = c.wrapping_add(b);
             d = d.wrapping_add(c);

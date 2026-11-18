@@ -176,7 +176,6 @@ impl<'a> Dec<'a> {
     }
 }
 
-/// A connected `SOCK_SEQPACKET` socket.
 pub struct LocalSock {
     fd: OwnedFd,
 }
@@ -263,7 +262,6 @@ impl AsFd for LocalSock {
     }
 }
 
-/// A listening `SOCK_SEQPACKET` socket, either bound here or inherited from systemd.
 pub struct LocalListener {
     fd: OwnedFd,
 }

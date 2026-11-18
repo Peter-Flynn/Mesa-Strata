@@ -39,6 +39,9 @@ const ADAPT_EVERY: u32 = 8;
 const MIN_LEVEL: i32 = 1;
 const MAX_LEVEL: i32 = 9;
 const START_LEVEL: i32 = 3;
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVE_PROBES: u32 = 6;
 
 #[derive(Clone)]
 enum Cipher {
@@ -89,7 +92,7 @@ impl FrameWriter {
 }
 
 struct FrameReader {
-    stream: TcpStream,
+    stream: Box<dyn Read + Send>,
     cipher: Cipher,
     nonce: u64,
     plain: Vec<u8>,
@@ -336,6 +339,12 @@ pub struct MsgReader {
 }
 
 impl MsgReader {
+    /// A reader over plaintext frames from any byte source (fuzzing, tests).
+    pub fn plain(r: impl Read + Send + 'static) -> MsgReader {
+        let fr = FrameReader { stream: Box::new(r), cipher: Cipher::Plain, nonce: 0, plain: Vec::new(), pos: 0, frame: Vec::new() };
+        MsgReader { fr, batch: Vec::new(), enc: Vec::new(), pos: 0 }
+    }
+
     fn read_batch(&mut self) -> Result<()> {
         let mut hdr = [0u8; BATCH_HEADER];
         self.fr.read_exact(&mut hdr)?;
@@ -399,7 +408,14 @@ pub struct Session {
 
 impl Session {
     fn build(stream: TcpStream, cipher: Cipher, threads: usize) -> io::Result<Session> {
-        rustix::net::sockopt::set_socket_keepalive(&stream, true).ok();
+        // A peer that loses power leaves the connection half-open; keepalive probes end it
+        // within KEEPALIVE_IDLE + KEEPALIVE_INTERVAL * KEEPALIVE_PROBES (2 minutes), which
+        // frees the server's per-source session for the peer's next run.
+        use rustix::net::sockopt;
+        sockopt::set_socket_keepalive(&stream, true).ok();
+        sockopt::set_tcp_keepidle(&stream, KEEPALIVE_IDLE).ok();
+        sockopt::set_tcp_keepintvl(&stream, KEEPALIVE_INTERVAL).ok();
+        sockopt::set_tcp_keepcnt(&stream, KEEPALIVE_PROBES).ok();
         let fw = FrameWriter {
             stream: stream.try_clone()?,
             cipher: cipher.clone(),
@@ -408,7 +424,7 @@ impl Session {
             ct: Vec::new(),
         };
         let fr = FrameReader {
-            stream: stream.try_clone()?,
+            stream: Box::new(stream.try_clone()?),
             cipher,
             nonce: 0,
             plain: Vec::new(),
@@ -434,14 +450,12 @@ impl Session {
         self.stream.set_read_timeout(t)
     }
 
-    /// Flushes pending output, then half-closes the connection.
     pub fn close(mut self) -> Result<()> {
         self.writer.flush()?;
         self.stream.shutdown(std::net::Shutdown::Write).ok();
         Ok(())
     }
 
-    /// Sends `msg` and waits for the reply.
     pub fn call(&mut self, msg: &Msg) -> Result<Msg> {
         self.writer.send_now(msg)?;
         self.reader.expect()

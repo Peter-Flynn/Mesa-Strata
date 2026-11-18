@@ -81,7 +81,6 @@ pub struct RecvOpts {
     pub origin: Option<String>,
 }
 
-/// A running send or receive.
 pub enum Job {
     Thread(JoinHandle<Result<()>>),
     Child { child: std::process::Child, what: String, stderr: Option<JoinHandle<String>> },

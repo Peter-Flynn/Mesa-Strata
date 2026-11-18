@@ -93,7 +93,8 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
             from = Some(srv);
         }
     }
-    let rx = zfs.receive(&target, &RecvOpts { resumable: false, no_mount: false, props: Vec::new(), origin })?;
+    // A raw stream arrives encrypted with its key unloaded, so it can't be mounted yet.
+    let rx = zfs.receive(&target, &RecvOpts { resumable: false, no_mount: src.raw, props: Vec::new(), origin })?;
     net.send(
         &CReq::Restore {
             source: o.source.clone(),
@@ -116,6 +117,9 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
     }
     recv.context("zfs receive")?;
     eprintln!("restored {}@{} into {target}", o.source, s.name);
+    if src.raw {
+        eprintln!("{target} is encrypted: run `zfs load-key {target}` and `zfs mount {target}`");
+    }
     if o.replace {
         if !zfs.exists(ds)? {
             zfs.rename(&target, ds)?;

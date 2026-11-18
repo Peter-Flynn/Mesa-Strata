@@ -4,7 +4,10 @@
 
 use strata_proto::local::{Dec, Enc, LOCAL_MSG, Malformed};
 use strata_proto::msg::{AuthMode, ErrorCode, ResumePoint, SnapshotInfo, SourceKind};
-use strata_proto::zipc::{NAME_MAX, SNAP_MAX, TEXT_MAX, code_from, code_to, get_resume, get_snapshot, kind_from, kind_to, put_resume, put_snapshot};
+use strata_proto::zipc::{
+    NAME_MAX, SNAP_MAX, TEXT_MAX, code_from, code_to, empty_snapshot, get_opt_snapshot, get_resume, get_snapshot,
+    kind_from, kind_to, put_resume, put_snapshot,
+};
 
 pub const ADDR_MAX: usize = 255;
 pub const SECRET_MAX: usize = 1024;
@@ -119,6 +122,9 @@ impl CReq {
                 let ok = d.bool()?;
                 let has = d.bool()?;
                 let v = d.u64()?;
+                if !has && v != 0 {
+                    return Err(Malformed("absent interval with content"));
+                }
                 CReq::StreamDone { ok, interval_secs: has.then_some(v) }
             }
             8 => CReq::Restore {
@@ -162,8 +168,7 @@ impl CResp {
             CResp::Source { name, kind, snapshots, newest } => {
                 let mut e = Enc::new(4);
                 e.str(name, NAME_MAX).u8(kind_to(*kind)).u32(*snapshots).bool(newest.is_some());
-                let empty = SnapshotInfo { name: String::new(), guid: 0, generation: 0, unix_time: 0, used_bytes: 0 };
-                put_snapshot(&mut e, newest.as_ref().unwrap_or(&empty));
+                put_snapshot(&mut e, newest.as_ref().unwrap_or(&empty_snapshot()));
                 e.finish()
             }
             CResp::Snapshot(s) => {
@@ -186,6 +191,9 @@ impl CResp {
                 let server_gen = d.u64()?;
                 let name = d.opt_str(SNAP_MAX)?;
                 let guid = d.u64()?;
+                if name.is_none() && guid != 0 {
+                    return Err(Malformed("absent head with a guid"));
+                }
                 CResp::Ready { server_gen, head: name.map(|n| (n, guid)), resume: get_resume(&mut d)? }
             }
             3 => CResp::Busy { retry_after_ms: d.u32()? },
@@ -194,8 +202,7 @@ impl CResp {
                 let kind = kind_from(d.u8()?)?;
                 let snapshots = d.u32()?;
                 let has = d.bool()?;
-                let s = get_snapshot(&mut d)?;
-                CResp::Source { name, kind, snapshots, newest: has.then_some(s) }
+                CResp::Source { name, kind, snapshots, newest: get_opt_snapshot(&mut d, has)? }
             }
             5 => CResp::Snapshot(get_snapshot(&mut d)?),
             6 => CResp::ListEnd,
