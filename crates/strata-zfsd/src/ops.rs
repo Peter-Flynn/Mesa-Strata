@@ -29,13 +29,6 @@ pub const BASE_HOLD: &str = "strata-base";
 pub const REBASE_HOLD: &str = "strata-rebase";
 pub const USER_PROPS: [&str; 4] = ["strata:gen", "strata:time", "strata:source", "strata:interval"];
 
-pub fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 pub fn kind_matches(kind: SourceKind, t: DsType) -> bool {
     matches!((kind, t), (SourceKind::Dataset, DsType::Filesystem) | (SourceKind::Zvol, DsType::Volume))
 }
@@ -316,7 +309,7 @@ mod tests {
         finalize_head(&z, &set).unwrap();
         assert!(z.holds("p/ds/d@strata-20260101T000000Z-g1").unwrap().is_empty());
         assert_eq!(z.holds("p/ds/d@strata-20260101T000001Z-g2").unwrap(), vec![BASE_HOLD]);
-        let destroyed = prune(&z, &set, Retention { keep: 1, dailies: 0 }, now()).unwrap();
+        let destroyed = prune(&z, &set, Retention { keep: 1, dailies: 0 }, strata_proto::names::unix_now()).unwrap();
         assert_eq!(destroyed, vec!["p/ds/d@strata-20260101T000000Z-g1"]);
         assert_eq!(z.snapshots("p/ds/d", &[]).unwrap().len(), 2, "foreign snapshot untouched");
     }

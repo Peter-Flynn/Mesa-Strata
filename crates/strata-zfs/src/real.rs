@@ -164,10 +164,20 @@ impl Zfs for Real {
     }
 
     fn destroy_snapshots(&self, snaps: &[String]) -> Result<Vec<(String, ZfsError)>> {
-        if snaps.is_empty() {
-            return Ok(Vec::new());
+        // lzc_destroy_snaps destroys none of the list when any snapshot fails, and names every
+        // failing one in its error list; calling again without those destroys the rest.
+        let mut todo = snaps.to_vec();
+        let mut failed = Vec::new();
+        while !todo.is_empty() {
+            let errs = lzc::destroy_snaps(&todo)?;
+            let before = todo.len();
+            todo.retain(|s| !errs.iter().any(|(f, _)| f == s));
+            failed.extend(errs);
+            if todo.len() == before {
+                break;
+            }
         }
-        lzc::destroy_snaps(snaps)
+        Ok(failed)
     }
 
     fn bookmark(&self, snap: &str, bookmark: &str) -> Result<()> {
@@ -192,7 +202,7 @@ impl Zfs for Real {
     }
 
     fn receive(&self, target: &str, opts: &RecvOpts) -> Result<Receiving> {
-        let (r, w) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).map_err(std::io::Error::from)?;
+        let (r, w) = crate::pipe()?;
         let mut cmd = Command::new(&self.zfs);
         cmd.arg("receive");
         if opts.resumable {

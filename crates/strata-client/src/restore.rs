@@ -6,7 +6,7 @@ use std::io::BufRead;
 
 use anyhow::{Context, bail};
 use strata_proto::msg::{ErrorCode, SnapshotInfo};
-use strata_proto::names::{utc_compact, utc_readable};
+use strata_proto::names::{unix_now, utc_compact, utc_readable};
 use strata_zfs::{DsType, RecvOpts, Zfs};
 
 use crate::config::SourceConfig;
@@ -216,7 +216,7 @@ fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<(
         zfs.rename(target, ds)?;
         return Ok(());
     }
-    let stamp = utc_compact(now());
+    let stamp = utc_compact(unix_now());
     let mut old = format!("{ds}-strata-old-{stamp}");
     let mut n = 1;
     while zfs.exists(&old)? {
@@ -266,8 +266,4 @@ fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<(
         bail!("{ds} was replaced, but these properties could not be carried over: {}", failed.join(", "));
     }
     Ok(())
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }

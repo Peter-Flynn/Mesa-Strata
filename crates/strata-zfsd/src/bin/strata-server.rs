@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     let zfs = strata_zfs::Real::default();
     match args.cmd {
         Cmd::DeriveKey { client } => println!("{}", admin::derive_key(&cfg, &client)?),
-        Cmd::Status => print!("{}", admin::status_table(&admin::collect(&cfg, &zfs)?, strata_zfsd::ops::now())),
+        Cmd::Status => print!("{}", admin::status_table(&admin::collect(&cfg, &zfs)?, strata_proto::names::unix_now())),
         Cmd::CheckStale { textfile } => {
             if admin::check_stale(&cfg, &zfs, textfile.as_deref())? {
                 std::process::exit(1);

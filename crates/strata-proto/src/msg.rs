@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u16 = 1;
-/// Versions this build accepts from a peer: the current one and the previous one, so
-/// servers and clients upgrade independently.
+/// Versions this build accepts from a peer. From version 2 on it lists the previous version
+/// too, so servers and clients upgrade independently.
 pub const SUPPORTED_VERSIONS: &[u16] = &[PROTOCOL_VERSION];
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

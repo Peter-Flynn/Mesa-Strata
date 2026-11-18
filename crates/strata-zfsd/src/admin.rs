@@ -8,7 +8,7 @@ use strata_proto::names::{utc_readable, valid_name};
 use strata_zfs::Zfs;
 
 use crate::config::ServerConfig;
-use crate::ops::{BASE_HOLD, REBASE_HOLD, SourceSet, member_source, now};
+use crate::ops::{BASE_HOLD, REBASE_HOLD, SourceSet, member_source};
 
 pub struct SourceStatus {
     pub client: String,
@@ -115,7 +115,7 @@ pub fn textfile(st: &[SourceStatus], now: i64) -> String {
 
 pub fn check_stale(cfg: &ServerConfig, zfs: &dyn Zfs, textfile_path: Option<&std::path::Path>) -> anyhow::Result<bool> {
     let st = collect(cfg, zfs)?;
-    let t = now();
+    let t = strata_proto::names::unix_now();
     let mut any = false;
     for x in st.iter().filter(|x| x.configured && x.stale(t)) {
         any = true;

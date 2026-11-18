@@ -13,7 +13,6 @@
 //!    committed it, creates the new cursor, then destroys the old one, then destroys (or
 //!    releases) the snapshot.
 
-use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -55,10 +54,6 @@ fn is_own_snapshot(source: &str, name: &str) -> bool {
 
 fn hold_tag(source: &str) -> String {
     format!("strata-send-{source}")
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -161,6 +156,7 @@ impl Ctx<'_> {
             self.zfs.destroy_bookmarks(&stale)?;
         }
         let tag = hold_tag(self.source);
+        let mut doomed = Vec::new();
         for s in self.snaps()? {
             let full = format!("{}@{}", self.ds, s.name);
             if Some(s.guid) == keep_guid {
@@ -170,12 +166,13 @@ impl Ctx<'_> {
             // exists, it is as disposable as the client's own snapshots.
             let restored = parse_server_snapshot_name(&s.name).is_some() && Some(s.guid) == base.map(|b| b.guid);
             if restored || (self.src.create_snapshots && is_own_snapshot(self.source, &s.name)) {
-                for (n, e) in self.zfs.destroy_snapshots(std::slice::from_ref(&full))? {
-                    log::warn!("could not destroy {n}: {e}");
-                }
+                doomed.push(full);
             } else if s.userrefs > 0 && self.zfs.holds(&full)?.contains(&tag) {
                 self.zfs.release(&full, &tag)?;
             }
+        }
+        for (n, e) in self.zfs.destroy_snapshots(&doomed)? {
+            log::warn!("could not destroy {n}: {e}");
         }
         Ok(())
     }
@@ -183,7 +180,7 @@ impl Ctx<'_> {
     fn stream(&self, snap: &Snap, base: Option<&Bookmark>, resume: Option<(u64, u64)>) -> anyhow::Result<String> {
         let full = format!("{}@{}", self.ds, snap.name);
         let from = base.map(|b| format!("{}#{}", self.ds, b.name));
-        let (r, w): (OwnedFd, OwnedFd) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
+        let (r, w) = strata_zfs::pipe()?;
         self.net.send(&CReq::Stream, Some(&r))?;
         drop(r);
         let job = self.zfs.send(&full, from.as_deref(), self.flags, resume, w)?;
@@ -270,7 +267,7 @@ pub fn backup(
             continue;
         }
         let target = if src.create_snapshots {
-            let name = own_snapshot_name(source, now());
+            let name = own_snapshot_name(source, strata_proto::names::unix_now());
             zfs.snapshot(&[format!("{ds}@{name}")], &[])?;
             fault::point("client.snapshot.taken");
             cx.snaps()?.into_iter().find(|s| s.name == name).context("new snapshot vanished")?

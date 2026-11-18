@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail, ensure};
 use strata_client::config::ClientConfig;
 use strata_client::ipc::{CReq, CResp};
-use strata_client::net::secret_to_ipc;
 use strata_zfs::{Fake, Zfs};
 use strata_zfsd::config::ServerConfig;
 
@@ -45,17 +44,7 @@ fn role_main(role: &str) -> anyhow::Result<()> {
 }
 
 fn spawn_net(cfg: &ClientConfig) -> anyhow::Result<(strata_client::net::NetClient, Child)> {
-    let exe = std::env::current_exe()?;
-    let (net, child) = strata_client::spawn::spawn_net_child(&exe, &["net-child"])?;
-    let secret = cfg.read_secret(None)?;
-    let r = net.call(&CReq::Init {
-        server: cfg.server.clone(),
-        client: cfg.name.clone(),
-        mode: cfg.mode(),
-        secret: secret_to_ipc(secret.as_ref()),
-    })?;
-    ensure!(r == CResp::Ok, "Init: {r:?}");
-    Ok((net, child))
+    strata_client::spawn::spawn_net_child(&std::env::current_exe()?, &["net-child"], cfg)
 }
 
 fn client_role() -> anyhow::Result<()> {

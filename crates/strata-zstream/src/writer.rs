@@ -128,8 +128,4 @@ impl<W: Write> StreamWriter<W> {
         self.w.flush()?;
         Ok(self.w)
     }
-
-    pub fn into_inner(self) -> W {
-        self.w
-    }
 }

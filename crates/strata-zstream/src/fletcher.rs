@@ -32,13 +32,6 @@ impl Fletcher4 {
         out
     }
 
-    pub fn from_bytes(b: &[u8]) -> Fletcher4 {
-        let mut w = [0u64; 4];
-        for (i, x) in w.iter_mut().enumerate() {
-            *x = u64::from_le_bytes(b[i * 8..i * 8 + 8].try_into().unwrap());
-        }
-        Fletcher4 { w }
-    }
 }
 
 #[cfg(test)]

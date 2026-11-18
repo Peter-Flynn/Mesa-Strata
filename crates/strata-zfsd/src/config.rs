@@ -97,10 +97,6 @@ impl ServerConfig {
         format!("{}/strata/{client}/ds", self.pool)
     }
 
-    pub fn source_ds(&self, client: &str, source: &str) -> String {
-        format!("{}/strata/{client}/ds/{source}", self.pool)
-    }
-
     pub fn retention(&self, client: &str) -> Retention {
         let c = self.clients.get(client);
         Retention {

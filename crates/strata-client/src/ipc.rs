@@ -2,6 +2,7 @@
 //! fixed-size local messages. `Stream` carries the read end of the send pipe and `Restore`
 //! the write end of the `zfs receive` pipe.
 
+use strata_proto::hs::{ClientAuth, ClientSecret};
 use strata_proto::local::{Dec, Enc, LOCAL_MSG, Malformed};
 use strata_proto::msg::{AuthMode, ErrorCode, ResumePoint, SnapshotInfo, SourceKind};
 use strata_proto::zipc::{
@@ -13,15 +14,8 @@ pub const ADDR_MAX: usize = 255;
 pub const SECRET_MAX: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Secret {
-    None,
-    Password(Vec<u8>),
-    Key([u8; 32]),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CReq {
-    Init { server: String, client: String, mode: AuthMode, secret: Secret },
+    Init { server: String, auth: ClientAuth },
     ListSources,
     ListSnapshots { source: String },
     Backup { source: String, kind: SourceKind },
@@ -49,19 +43,18 @@ pub enum CResp {
 impl CReq {
     pub fn encode(&self) -> Result<Box<[u8; LOCAL_MSG]>, Malformed> {
         match self {
-            CReq::Init { server, client, mode, secret } => {
+            CReq::Init { server, auth } => {
                 let mut e = Enc::new(1);
-                e.str(server, ADDR_MAX).str(client, NAME_MAX).u8(matches!(mode, AuthMode::None) as u8);
-                let (kind, bytes): (u8, &[u8]) = match secret {
-                    Secret::None => (0, &[]),
-                    Secret::Password(p) => (1, p),
-                    Secret::Key(k) => (2, k),
+                e.str(server, ADDR_MAX).str(&auth.client, NAME_MAX).u8(matches!(auth.mode, AuthMode::None) as u8);
+                let (kind, bytes): (u8, &[u8]) = match &auth.secret {
+                    None => (0, &[]),
+                    Some(ClientSecret::Password(p)) => (1, p),
+                    Some(ClientSecret::Key(k)) => (2, k),
                 };
                 if bytes.len() > SECRET_MAX {
                     return Err(Malformed("secret too long"));
                 }
-                e.u8(kind).u16(bytes.len() as u16).bytes(bytes);
-                e.bytes(&vec![0u8; SECRET_MAX - bytes.len()]);
+                e.u8(kind).u16(bytes.len() as u16).bytes(bytes).bytes(&[0; SECRET_MAX][bytes.len()..]);
                 e.finish()
             }
             CReq::ListSources => Enc::new(2).finish(),
@@ -100,20 +93,17 @@ impl CReq {
                 if len > SECRET_MAX {
                     return Err(Malformed("secret too long"));
                 }
-                let mut field = vec![0u8; SECRET_MAX];
-                for b in field.iter_mut() {
-                    *b = d.u8()?;
-                }
+                let field = d.bytes(SECRET_MAX)?;
                 if field[len..].iter().any(|&b| b != 0) {
                     return Err(Malformed("nonzero secret padding"));
                 }
                 let secret = match (kind, len) {
-                    (0, 0) => Secret::None,
-                    (1, _) => Secret::Password(field[..len].to_vec()),
-                    (2, 32) => Secret::Key(field[..32].try_into().unwrap()),
+                    (0, 0) => None,
+                    (1, _) => Some(ClientSecret::Password(field[..len].to_vec())),
+                    (2, 32) => Some(ClientSecret::Key(field[..32].try_into().unwrap())),
                     _ => return Err(Malformed("bad secret")),
                 };
-                CReq::Init { server, client, mode, secret }
+                CReq::Init { server, auth: ClientAuth { client, mode, secret } }
             }
             2 => CReq::ListSources,
             3 => CReq::ListSnapshots { source: d.str(NAME_MAX)? },
@@ -223,12 +213,16 @@ impl CResp {
 mod tests {
     use super::*;
 
+    fn init(mode: AuthMode, secret: Option<ClientSecret>) -> CReq {
+        CReq::Init { server: "b:7420".into(), auth: ClientAuth { client: "nas".into(), mode, secret } }
+    }
+
     #[test]
     fn roundtrip() {
         let reqs = vec![
-            CReq::Init { server: "b:7420".into(), client: "nas".into(), mode: AuthMode::Psk, secret: Secret::Password(b"pw".to_vec()) },
-            CReq::Init { server: "b:7420".into(), client: "nas".into(), mode: AuthMode::Psk, secret: Secret::Key([5; 32]) },
-            CReq::Init { server: "b:7420".into(), client: "nas".into(), mode: AuthMode::None, secret: Secret::None },
+            init(AuthMode::Psk, Some(ClientSecret::Password(b"pw".to_vec()))),
+            init(AuthMode::Psk, Some(ClientSecret::Key([5; 32]))),
+            init(AuthMode::None, None),
             CReq::Backup { source: "home".into(), kind: SourceKind::Zvol },
             CReq::StreamDone { ok: true, interval_secs: Some(60) },
             CReq::Restore { source: "h".into(), snapshot: "s".into(), from: None, fromguid: 0, toguid: 9 },

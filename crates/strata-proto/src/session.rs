@@ -17,7 +17,7 @@
 //! batches are sent raw without trying.
 
 use std::collections::BTreeMap;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -25,7 +25,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::frame::{MAX_PLAINTEXT, read_frame, write_frame};
+use crate::frame::{MAX_PLAINTEXT, read_frame};
 use crate::msg::{self, MAX_MSG, Msg};
 use crate::{Error, Result};
 
@@ -49,19 +49,20 @@ enum Cipher {
     Noise(Arc<snow::StatelessTransportState>),
 }
 
+/// Plaintext waits in `pending`; each frame goes out as one write from `out`, whose first
+/// two bytes are the length prefix.
 struct FrameWriter {
     stream: TcpStream,
     cipher: Cipher,
     nonce: u64,
     pending: Vec<u8>,
-    ct: Vec<u8>,
+    out: Vec<u8>,
 }
 
 impl FrameWriter {
     fn put(&mut self, mut data: &[u8]) -> io::Result<()> {
         while !data.is_empty() {
-            let room = MAX_PLAINTEXT - self.pending.len();
-            let n = room.min(data.len());
+            let n = (MAX_PLAINTEXT - self.pending.len()).min(data.len());
             self.pending.extend_from_slice(&data[..n]);
             data = &data[n..];
             if self.pending.len() == MAX_PLAINTEXT {
@@ -75,17 +76,25 @@ impl FrameWriter {
         if self.pending.is_empty() {
             return Ok(());
         }
-        match &self.cipher {
-            Cipher::Plain => write_frame(&mut self.stream, &self.pending)?,
+        let len = match &self.cipher {
+            Cipher::Plain => {
+                self.out.clear();
+                self.out.extend_from_slice(&[0, 0]);
+                self.out.extend_from_slice(&self.pending);
+                self.pending.len()
+            }
             Cipher::Noise(t) => {
-                self.ct.resize(self.pending.len() + crate::frame::AEAD_TAG, 0);
+                self.out.resize(2 + self.pending.len() + crate::frame::AEAD_TAG, 0);
                 let n = t
-                    .write_message(self.nonce, &self.pending, &mut self.ct)
+                    .write_message(self.nonce, &self.pending, &mut self.out[2..])
                     .map_err(|e| io::Error::other(format!("noise encrypt: {e}")))?;
                 self.nonce += 1;
-                write_frame(&mut self.stream, &self.ct[..n])?;
+                self.out.truncate(2 + n);
+                n
             }
-        }
+        };
+        self.out[..2].copy_from_slice(&(len as u16).to_be_bytes());
+        self.stream.write_all(&self.out)?;
         self.pending.clear();
         Ok(())
     }
@@ -102,7 +111,8 @@ struct FrameReader {
 
 impl Read for FrameReader {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        if self.pos == self.plain.len() {
+        // An empty frame carries nothing; returning 0 for it would read as end of stream.
+        while self.pos == self.plain.len() {
             read_frame(&mut self.stream, &mut self.frame)?;
             match &self.cipher {
                 Cipher::Plain => std::mem::swap(&mut self.plain, &mut self.frame),
@@ -150,12 +160,13 @@ pub struct MsgWriter {
     threads: Vec<JoinHandle<()>>,
 }
 
-fn encode_batch(job: &Job, shared: &WShared) -> Vec<u8> {
+fn encode_batch(job: &Job, shared: &WShared, z: &mut zstd::bulk::Compressor<'static>) -> Vec<u8> {
     let raw = &job.raw;
     let try_compress = raw.len() >= MIN_COMPRESS && job.seq >= shared.raw_until.load(Ordering::Relaxed);
     let compressed = if try_compress {
         let level = shared.level.load(Ordering::Relaxed);
-        zstd::bulk::compress(raw, level)
+        z.set_compression_level(level)
+            .and_then(|_| z.compress(raw))
             .ok()
             .filter(|c| c.len() < raw.len() - raw.len() * 3 / 100)
     } else {
@@ -237,13 +248,14 @@ impl MsgWriter {
             let tx = res_tx.clone();
             let sh = shared.clone();
             handles.push(std::thread::spawn(move || {
+                let mut z = zstd::bulk::Compressor::new(START_LEVEL).expect("zstd context");
                 loop {
                     let job = match rx.lock().unwrap().recv() {
                         Ok(j) => j,
                         Err(_) => return,
                     };
                     let big = job.raw.len() >= MIN_COMPRESS;
-                    let enc = encode_batch(&job, &sh);
+                    let enc = encode_batch(&job, &sh, &mut z);
                     if tx.send((job.seq, enc, big)).is_err() {
                         return;
                     }
@@ -316,10 +328,6 @@ impl MsgWriter {
         self.send(m)?;
         self.flush()
     }
-
-    pub fn level(&self) -> i32 {
-        self.shared.level.load(Ordering::Relaxed)
-    }
 }
 
 impl Drop for MsgWriter {
@@ -336,13 +344,14 @@ pub struct MsgReader {
     batch: Vec<u8>,
     enc: Vec<u8>,
     pos: usize,
+    unzstd: Option<zstd::bulk::Decompressor<'static>>,
 }
 
 impl MsgReader {
     /// A reader over plaintext frames from any byte source (fuzzing, tests).
     pub fn plain(r: impl Read + Send + 'static) -> MsgReader {
         let fr = FrameReader { stream: Box::new(r), cipher: Cipher::Plain, nonce: 0, plain: Vec::new(), pos: 0, frame: Vec::new() };
-        MsgReader { fr, batch: Vec::new(), enc: Vec::new(), pos: 0 }
+        MsgReader { fr, batch: Vec::new(), enc: Vec::new(), pos: 0, unzstd: None }
     }
 
     fn read_batch(&mut self) -> Result<()> {
@@ -361,8 +370,14 @@ impl MsgReader {
             1 => {
                 self.batch.clear();
                 self.batch.resize(raw_len, 0);
-                let n = zstd::bulk::Decompressor::new()
-                    .and_then(|mut d| d.decompress_to_buffer(&self.enc, &mut self.batch[..]))
+                if self.unzstd.is_none() {
+                    self.unzstd = Some(zstd::bulk::Decompressor::new()?);
+                }
+                let n = self
+                    .unzstd
+                    .as_mut()
+                    .unwrap()
+                    .decompress_to_buffer(&self.enc, &mut self.batch[..])
                     .map_err(|e| Error::Protocol(format!("zstd: {e}")))?;
                 if n != raw_len {
                     return Err(Error::Protocol("batch decompressed to the wrong length".into()));
@@ -421,7 +436,7 @@ impl Session {
             cipher: cipher.clone(),
             nonce: 0,
             pending: Vec::with_capacity(MAX_PLAINTEXT),
-            ct: Vec::new(),
+            out: Vec::with_capacity(crate::frame::MAX_FRAME + 2),
         };
         let fr = FrameReader {
             stream: Box::new(stream.try_clone()?),
@@ -432,7 +447,7 @@ impl Session {
             frame: Vec::new(),
         };
         Ok(Session {
-            reader: MsgReader { fr, batch: Vec::new(), enc: Vec::new(), pos: 0 },
+            reader: MsgReader { fr, batch: Vec::new(), enc: Vec::new(), pos: 0, unzstd: None },
             writer: MsgWriter::new(fw, threads),
             stream,
         })
@@ -535,7 +550,7 @@ mod tests {
         let mut ct = vec![0u8; 100];
         let n = t.write_message(0, b"hello world, this is a batch", &mut ct).unwrap();
         ct[5] ^= 1;
-        write_frame(&mut raw, &ct[..n]).unwrap();
+        crate::frame::write_frame(&mut raw, &ct[..n]).unwrap();
         assert!(sb.reader.recv().is_err());
     }
 
@@ -549,12 +564,13 @@ mod tests {
         };
         let mut noise = vec![0u8; 100_000];
         getrandom::fill(&mut noise).unwrap();
-        let out = encode_batch(&Job { seq: 5, raw: noise }, &shared);
+        let mut z = zstd::bulk::Compressor::new(3).unwrap();
+        let out = encode_batch(&Job { seq: 5, raw: noise }, &shared, &mut z);
         assert_eq!(out[0], 0);
         assert_eq!(shared.raw_until.load(Ordering::Relaxed), 5 + 1 + RAW_PAUSE_BATCHES);
-        let zeros = encode_batch(&Job { seq: 10, raw: vec![0u8; 100_000] }, &shared);
+        let zeros = encode_batch(&Job { seq: 10, raw: vec![0u8; 100_000] }, &shared, &mut z);
         assert_eq!(zeros[0], 0, "paused batches go raw");
-        let zeros = encode_batch(&Job { seq: 70, raw: vec![0u8; 100_000] }, &shared);
+        let zeros = encode_batch(&Job { seq: 70, raw: vec![0u8; 100_000] }, &shared, &mut z);
         assert_eq!(zeros[0], 1, "compression probes again after the pause");
     }
 }

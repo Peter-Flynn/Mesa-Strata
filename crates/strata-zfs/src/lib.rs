@@ -161,6 +161,11 @@ pub trait Zfs: Send + Sync {
     fn allow(&self, user: &str, perms: &str, ds: &str) -> Result<()>;
 }
 
-pub fn split_snapshot(full: &str) -> Option<(&str, &str)> {
-    full.split_once('@')
+/// A close-on-exec pipe for a send stream. 1 MiB is the default
+/// `/proc/sys/fs/pipe-max-size`; against the 64 KiB default capacity it cuts the reads and
+/// wakeups per stream sixteenfold. A kernel that refuses keeps the default.
+pub fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let (r, w) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
+    let _ = rustix::pipe::fcntl_setpipe_size(&w, 1 << 20);
+    Ok((r, w))
 }

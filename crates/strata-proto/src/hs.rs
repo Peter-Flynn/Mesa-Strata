@@ -125,11 +125,23 @@ pub fn noise_builder<'a>(prologue: &'a [u8], psk: &'a [u8; 32]) -> snow::Builder
         .expect("psk")
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub enum ClientSecret {
     Password(Vec<u8>),
     Key(DerivedKey),
 }
 
+/// Prints the kind only, so a logged request never carries the secret.
+impl std::fmt::Debug for ClientSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ClientSecret::Password(_) => "Password(..)",
+            ClientSecret::Key(_) => "Key(..)",
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientAuth {
     pub client: String,
     pub mode: AuthMode,

@@ -10,39 +10,20 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use strata_proto::fault;
-use strata_proto::hs::{ClientAuth, ClientSecret, client_handshake};
+use strata_proto::hs::{ClientAuth, client_handshake};
 use strata_proto::local::LocalSock;
-use strata_proto::msg::{AuthMode, CommitMeta, ErrorCode, Msg, RestoreMode, ZFS_CHUNK};
+use strata_proto::msg::{CommitMeta, ErrorCode, Msg, RestoreMode, ZFS_CHUNK};
 use strata_proto::session::Session;
 use strata_zstream::{Expect, Validator};
 
-use crate::ipc::{CReq, CResp, Secret};
+use crate::ipc::{CReq, CResp};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub struct Settings {
     pub server: String,
-    pub client: String,
-    pub mode: AuthMode,
-    pub secret: Option<ClientSecret>,
-    pub compress_threads: usize,
-}
-
-pub fn secret_from_ipc(s: Secret) -> Option<ClientSecret> {
-    match s {
-        Secret::None => None,
-        Secret::Password(p) => Some(ClientSecret::Password(p)),
-        Secret::Key(k) => Some(ClientSecret::Key(k)),
-    }
-}
-
-pub fn secret_to_ipc(s: Option<&ClientSecret>) -> Secret {
-    match s {
-        None => Secret::None,
-        Some(ClientSecret::Password(p)) => Secret::Password(p.clone()),
-        Some(ClientSecret::Key(k)) => Secret::Key(*k),
-    }
+    pub auth: ClientAuth,
 }
 
 fn connect(st: &Settings) -> anyhow::Result<Session> {
@@ -53,15 +34,8 @@ fn connect(st: &Settings) -> anyhow::Result<Session> {
         match TcpStream::connect_timeout(&a, CONNECT_TIMEOUT) {
             Ok(tcp) => {
                 tcp.set_read_timeout(Some(IDLE_TIMEOUT))?;
-                let auth = ClientAuth {
-                    client: st.client.clone(),
-                    mode: st.mode,
-                    secret: st.secret.as_ref().map(|s| match s {
-                        ClientSecret::Password(p) => ClientSecret::Password(p.clone()),
-                        ClientSecret::Key(k) => ClientSecret::Key(*k),
-                    }),
-                };
-                return client_handshake(tcp, &auth, st.compress_threads).map_err(anyhow::Error::from);
+                let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
+                return client_handshake(tcp, &st.auth, threads).map_err(anyhow::Error::from);
             }
             Err(e) => last = Some(e),
         }
@@ -103,11 +77,11 @@ pub fn serve(local: LocalSock, settings: Option<Settings>) -> anyhow::Result<()>
         if !matches!(req, CReq::Stream | CReq::Restore { .. }) && !fds.is_empty() {
             bail!("unexpected descriptor");
         }
-        if let CReq::Init { server, client, mode, secret } = req {
+        if let CReq::Init { server, auth } = req {
             if settings.is_some() {
                 bail!("Init sent twice");
             }
-            settings = Some(Settings { server, client, mode, secret: secret_from_ipc(secret), compress_threads: 2 });
+            settings = Some(Settings { server, auth });
             reply(&local, CResp::Ok)?;
             continue;
         }
@@ -251,7 +225,6 @@ fn restore(
                 if let Err(e) = v.finish() {
                     return Ok(CResp::error(ErrorCode::Validation, format!("restore stream refused: {e}")));
                 }
-                pipe.flush()?;
                 return Ok(CResp::Restored);
             }
             other => return Ok(msg_to_resp(other)),

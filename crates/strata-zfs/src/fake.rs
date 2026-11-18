@@ -238,16 +238,6 @@ impl Fake {
         })
     }
 
-    pub fn create_volume(&self, ds: &str) -> Result<()> {
-        self.with(|st| {
-            if st.datasets.contains_key(ds) {
-                return Err(ZfsError::Exists(ds.into()));
-            }
-            st.datasets.insert(ds.to_string(), Ds::new(DsType::Volume));
-            Ok(())
-        })
-    }
-
     pub fn write_object(&self, ds: &str, object: u64, data: &[u8]) -> Result<()> {
         let blob = self.put_blob(data)?;
         self.with(|st| {
@@ -859,7 +849,7 @@ impl Zfs for Fake {
     }
 
     fn receive(&self, target: &str, opts: &RecvOpts) -> Result<Receiving> {
-        let (r, w) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).map_err(std::io::Error::from)?;
+        let (r, w) = crate::pipe()?;
         let fake = self.clone();
         let target = target.to_string();
         let opts = opts.clone();

@@ -34,7 +34,6 @@ pub struct Summary {
     pub features: u64,
     pub objset_type: u32,
     pub resume: Option<(u64, u64)>,
-    pub bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,10 +124,6 @@ impl Validator {
         }
     }
 
-    pub fn summary(&self) -> Option<&Summary> {
-        self.summary.as_ref()
-    }
-
     fn begin(&mut self, h: &[u8]) -> Result<(), StreamError> {
         let magic = u64_at(h, 8);
         if magic == DMU_BACKUP_MAGIC.swap_bytes() {
@@ -191,7 +186,6 @@ impl Validator {
             features: feat,
             objset_type,
             resume: None,
-            bytes: 0,
         });
         Ok(())
     }
@@ -313,9 +307,6 @@ impl Validator {
                     }
                 }
             }
-        }
-        if let Some(s) = self.summary.as_mut() {
-            s.bytes = self.offset;
         }
         Ok(())
     }

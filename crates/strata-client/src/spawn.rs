@@ -3,8 +3,11 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+use strata_proto::hs::ClientAuth;
 use strata_proto::local::LocalSock;
 
+use crate::config::ClientConfig;
+use crate::ipc::{CReq, CResp};
 use crate::net::NetClient;
 
 /// UID/GID of `nobody`/`nogroup` (65534 on NixOS and most distributions).
@@ -21,9 +24,10 @@ fn nobody() -> (u32, u32) {
         .unwrap_or((NOBODY, NOBODY))
 }
 
-/// Starts the network half as a child process talking over its stdin. Run as root, the
-/// child drops to `nobody` with no supplementary groups before it executes.
-pub fn spawn_net_child(exe: &Path, args: &[&str]) -> anyhow::Result<(NetClient, Child)> {
+/// Starts the network half as a child process talking over its stdin (`exe args...` must
+/// run `net_child_socket` and `net::serve`) and hands it the server address and secret.
+/// Run as root, the child drops to `nobody` with no supplementary groups before it executes.
+pub fn spawn_net_child(exe: &Path, args: &[&str], cfg: &ClientConfig) -> anyhow::Result<(NetClient, Child)> {
     let (ours, theirs) = LocalSock::pair()?;
     let mut cmd = Command::new(exe);
     cmd.args(args).stdin(Stdio::from(OwnedFd::from(theirs))).stdout(Stdio::null());
@@ -32,7 +36,12 @@ pub fn spawn_net_child(exe: &Path, args: &[&str]) -> anyhow::Result<(NetClient, 
         cmd.uid(uid).gid(gid);
     }
     let child = cmd.spawn()?;
-    Ok((NetClient::new(ours), child))
+    let net = NetClient::new(ours);
+    let auth = ClientAuth { client: cfg.name.clone(), mode: cfg.mode(), secret: cfg.read_secret(None)? };
+    match net.call(&CReq::Init { server: cfg.server.clone(), auth })? {
+        CResp::Ok => Ok((net, child)),
+        other => anyhow::bail!("network half refused Init: {other:?}"),
+    }
 }
 
 /// In the child: takes the socket from stdin and forbids regaining privileges.

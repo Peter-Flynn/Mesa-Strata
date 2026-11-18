@@ -141,6 +141,9 @@ impl<'a> Dec<'a> {
     pub fn array<const N: usize>(&mut self) -> Result<[u8; N], Malformed> {
         Ok(self.take(N)?.try_into().unwrap())
     }
+    pub fn bytes(&mut self, n: usize) -> Result<&'a [u8], Malformed> {
+        self.take(n)
+    }
 
     pub fn str(&mut self, max: usize) -> Result<String, Malformed> {
         let len = self.u16()? as usize;
@@ -243,10 +246,6 @@ impl LocalSock {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "too many descriptors"));
         }
         Ok(Some(Received { msg, fds }))
-    }
-
-    pub fn peer_uid(&self) -> io::Result<u32> {
-        Ok(rustix::net::sockopt::socket_peercred(&self.fd)?.uid.as_raw())
     }
 }
 

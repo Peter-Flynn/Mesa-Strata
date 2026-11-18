@@ -157,10 +157,6 @@ impl Initiator {
         (init, ya_enc)
     }
 
-    pub fn own_element(&self) -> &Element {
-        &self.ya_enc
-    }
-
     pub fn finish(self, yb: &Element, adb: &[u8]) -> Result<Keys, CpaceError> {
         let k = scalar_mult_vfy(&self.ya, yb)?;
         let isk = isk(&self.sid, &k, &self.ya_enc, &self.ada, yb, adb);

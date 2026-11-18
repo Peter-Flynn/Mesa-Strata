@@ -21,15 +21,15 @@ use strata_proto::hs::{AD_CLIENT, AD_SERVER, PSK_LABEL, RejectReason, channel_id
 use strata_proto::kdf::{DerivedKey, ServerId};
 use strata_proto::local::{LocalListener, LocalSock};
 use strata_proto::msg::{AuthMode, ErrorCode, ResumePoint, SUPPORTED_VERSIONS, SourceKind};
-use strata_proto::names::{server_snapshot_name, valid_name};
+use strata_proto::names::{server_snapshot_name, unix_now as now, valid_name};
 use strata_proto::zipc::{ZReq, ZResp};
 use strata_zfs::{Job, RecvOpts, SendFlags, Zfs};
 
 use crate::auth::{Backoff, Key, peer_of};
 use crate::config::ServerConfig;
 use crate::ops::{
-    SourceSet, finalize_head, finalize_rebase, full, is_ancestor, kind_matches, kind_of, member_source, now, prune,
-    set_rebase, sibling, snapshot_info,
+    SourceSet, finalize_head, finalize_rebase, full, is_ancestor, kind_matches, kind_of, member_source, prune, set_rebase,
+    sibling, snapshot_info,
 };
 
 const BUSY_RETRY_MS: u32 = 30_000;
@@ -581,7 +581,7 @@ impl Conn {
             return one(ZResp::Busy { retry_after_ms: BUSY_RETRY_MS });
         };
         let raw = zfs.get_prop(to_ds, "encryption").ok().flatten().is_some_and(|e| e != "off");
-        let (r, w) = match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
+        let (r, w) = match strata_zfs::pipe() {
             Ok(p) => p,
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         };

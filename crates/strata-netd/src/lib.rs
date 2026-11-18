@@ -286,6 +286,7 @@ fn session(mut s: Session, z: &Zfsd, client: &str) -> anyhow::Result<()> {
                 let Some(mut b) = backup.take() else { bail!("Commit outside a backup") };
                 let Some(rx) = b.rx.take() else { bail!("Commit before any stream data") };
                 if let Err(e) = rx.v.finish() {
+                    drop(rx);
                     z.call(&ZReq::Abort)?;
                     s.writer.send_now(&Msg::Error { code: ErrorCode::Validation, message: e.to_string() })?;
                     return Ok(());
@@ -302,6 +303,7 @@ fn session(mut s: Session, z: &Zfsd, client: &str) -> anyhow::Result<()> {
                 }
             }
             Msg::Abort => {
+                drop(backup.take());
                 z.call(&ZReq::Abort)?;
                 return Ok(());
             }

@@ -41,6 +41,10 @@ pub fn parse_server_snapshot_name(name: &str) -> Option<u64> {
     generation.parse().ok()
 }
 
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
 pub fn utc_compact(unix_secs: i64) -> String {
     let (y, mo, d, h, mi, s) = civil(unix_secs);
     format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")

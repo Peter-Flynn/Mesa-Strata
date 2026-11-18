@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use strata_client::config::ClientConfig;
-use strata_client::ipc::{CReq, CResp};
-use strata_client::net::{NetClient, Settings, secret_to_ipc, serve};
+use strata_client::net::{NetClient, Settings, serve};
 use strata_client::{backup, interval, restore, spawn};
+use strata_proto::hs::ClientAuth;
 use strata_proto::local::LocalSock;
 
 #[derive(Parser)]
@@ -52,19 +52,8 @@ enum Cmd {
 }
 
 fn spawn_child(cfg: &ClientConfig, config_path: &std::path::Path) -> anyhow::Result<(NetClient, std::process::Child)> {
-    let exe = std::env::current_exe()?;
     let path = config_path.to_string_lossy().into_owned();
-    let (net, child) = spawn::spawn_net_child(&exe, &["--config", &path, "net-child"])?;
-    let secret = cfg.read_secret(None)?;
-    match net.call(&CReq::Init {
-        server: cfg.server.clone(),
-        client: cfg.name.clone(),
-        mode: cfg.mode(),
-        secret: secret_to_ipc(secret.as_ref()),
-    })? {
-        CResp::Ok => Ok((net, child)),
-        other => anyhow::bail!("network half refused Init: {other:?}"),
-    }
+    spawn::spawn_net_child(&std::env::current_exe()?, &["--config", &path, "net-child"], cfg)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -77,13 +66,8 @@ fn main() -> anyhow::Result<()> {
             let cfg = ClientConfig::load(&args.config)?;
             let fd = fds.into_iter().next().context("no connection passed by systemd (Accept=yes)")?;
             let creds = std::env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
-            let settings = Settings {
-                server: cfg.server.clone(),
-                client: cfg.name.clone(),
-                mode: cfg.mode(),
-                secret: cfg.read_secret(creds.as_deref())?,
-                compress_threads: std::thread::available_parallelism().map_or(2, |n| n.get()),
-            };
+            let auth = ClientAuth { client: cfg.name.clone(), mode: cfg.mode(), secret: cfg.read_secret(creds.as_deref())? };
+            let settings = Settings { server: cfg.server.clone(), auth };
             serve(LocalSock::from_fd(fd), Some(settings))
         }
         Cmd::Backup { source, spawn_net } => {
