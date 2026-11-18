@@ -147,6 +147,10 @@ pub trait Zfs: Send + Sync {
     fn rename(&self, from: &str, to: &str) -> Result<()>;
     /// `zfs mount`; needs root on Linux.
     fn mount(&self, ds: &str) -> Result<()>;
+    /// `zfs unmount`; fails with `Busy` while files are open.
+    fn unmount(&self, ds: &str) -> Result<()>;
+    /// Properties set locally on `ds` (`zfs get -s local`), user properties included.
+    fn local_props(&self, ds: &str) -> Result<Vec<(String, String)>>;
     fn destroy_recursive(&self, ds: &str) -> Result<()>;
     fn allow(&self, user: &str, perms: &str, ds: &str) -> Result<()>;
 }

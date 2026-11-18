@@ -453,11 +453,31 @@ fn t_restore_full_and_replace() -> anyhow::Result<()> {
     ensure!(st.success(), "restore: {err}");
     ensure!(out.trim() == "rpool/home-restore-g1", "{out}");
     ensure!(w.client.content("rpool/home-restore-g1")? == before);
+
+    w.client.set_props("rpool/home", &[("mountpoint", "/srv/home"), ("com.example:tag", "kept")])?;
+    w.client.create("rpool/home/child", &[])?;
+    let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home2", "--replace"])?;
+    ensure!(!st.success() && err.contains("child datasets"), "children must refuse: {err}");
+    ensure!(!w.client.exists("rpool/home2")?, "nothing restored when refused");
+    w.client.destroy_recursive("rpool/home/child")?;
+
+    w.client.set_props("rpool/home", &[("fake:busy", "on")])?;
+    let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home3", "--replace"])?;
+    ensure!(!st.success() && err.contains("nothing was changed"), "busy must refuse: {err}");
+    ensure!(w.client.content("rpool/home")?[&1] == b"oops", "original untouched");
+    ensure!(w.client.get_prop("rpool/home", "canmount")?.is_none(), "canmount untouched");
+    ensure!(w.client.exists("rpool/home3")?, "restored copy left for the user");
+    w.client.set_props("rpool/home", &[("fake:busy", "off")])?;
+
     let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", "rpool/home2", "--replace"])?;
     ensure!(st.success(), "replace: {err}");
     ensure!(w.client.content("rpool/home")? == before);
+    ensure!(w.client.get_prop("rpool/home", "mountpoint")?.as_deref() == Some("/srv/home"), "mountpoint carried over");
+    ensure!(w.client.get_prop("rpool/home", "com.example:tag")?.as_deref() == Some("kept"), "user property carried over");
     let olds: Vec<String> = w.client.children("rpool")?.into_iter().filter(|c| c.contains("-strata-old-")).collect();
     ensure!(olds.len() == 1, "old copy kept: {olds:?}");
+    ensure!(w.client.get_prop(&olds[0], "canmount")?.as_deref() == Some("noauto"), "old copy can't automount");
+    ensure!(w.client.content(&olds[0])?[&1] == b"oops", "old copy holds the previous data");
     Ok(())
 }
 

@@ -892,6 +892,23 @@ impl Zfs for Fake {
         self.with(|st| st.ds(ds).map(drop))
     }
 
+    /// The fake has no mounts; a dataset with the test property `fake:busy=on` fails to
+    /// unmount, standing in for one with open files.
+    fn unmount(&self, ds: &str) -> Result<()> {
+        self.with(|st| {
+            if st.ds(ds)?.props.get("fake:busy").is_some_and(|v| v == "on") {
+                return Err(ZfsError::Busy(format!("cannot unmount {ds}: target is busy")));
+            }
+            Ok(())
+        })
+    }
+
+    fn local_props(&self, ds: &str) -> Result<Vec<(String, String)>> {
+        self.with(|st| {
+            Ok(st.ds(ds)?.props.iter().filter(|(k, _)| !k.starts_with("fake:")).map(|(k, v)| (k.clone(), v.clone())).collect())
+        })
+    }
+
     fn destroy_recursive(&self, ds: &str) -> Result<()> {
         self.with(|st| {
             st.ds(ds)?;

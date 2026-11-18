@@ -191,11 +191,19 @@ in
         client.succeed("strata restore snaps latest --target rpool/snaps-restored 2>&1 | grep -q incrementally")
         client.succeed("diff -r /rpool/snaps/.zfs/snapshot/autosnap_2_hourly /rpool/snaps-restored")
 
-    with subtest("replace keeps the original under a new name"):
-        client.succeed("echo scribble > /rpool/home/b")
+    with subtest("replace refuses a busy original and keeps it under a new name"):
+        client.succeed("echo scribble > /rpool/home/b", "zfs set com.example:tag=kept rpool/home")
+        client.succeed("systemd-run --unit=holder --working-directory=/rpool/home sleep 600")
+        out = client.fail("strata restore home latest --target rpool/home-busy --replace --yes 2>&1")
+        assert "nothing was changed" in out, out
+        client.fail("zfs list -H -o name | grep -q '^rpool/home-strata-old-'")
+        assert client.succeed("zfs get -H -o value mounted rpool/home").strip() == "yes"
+        client.succeed("systemctl stop holder", "zfs destroy -r rpool/home-busy")
         client.succeed("strata restore home latest --target rpool/home-new --replace --yes")
         client.succeed("diff -r /rpool/restored /rpool/home")
-        client.succeed("zfs list -H -o name | grep -q '^rpool/home-strata-old-'")
+        old = client.succeed("zfs list -H -o name | grep '^rpool/home-strata-old-'").strip()
+        assert client.succeed(f"zfs get -H -o value canmount {old}").strip() == "noauto"
+        assert client.succeed("zfs get -H -o value com.example:tag rpool/home").strip() == "kept"
 
     with subtest("server status"):
         out = server.succeed("strata-server status")

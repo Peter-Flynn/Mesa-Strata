@@ -10,7 +10,7 @@ Checks the whole dataset path on real OpenZFS 2.4.4: libzfs_core calls, `zfs all
 nix build -L .#checks.x86_64-linux.vm-backup-restore
 ```
 
-Expected: exit status 0, and the log shows every subtest finishing: tree and isolation properties, first backup is full, incrementals/holds/retention, zvol source, raw send, snapshotPattern mode, list and restore, replace, server status, privilege split, wrong password, insecure client.
+Expected: exit status 0, and the log shows every subtest finishing: tree and isolation properties, first backup is full, incrementals/holds/retention, zvol source, raw send, snapshotPattern mode, list and restore, replace (busy original refused, properties carried, original kept with canmount=noauto), server status, privilege split, wrong password, insecure client.
 
 Latest result: not run yet.
 

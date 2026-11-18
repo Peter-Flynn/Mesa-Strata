@@ -233,6 +233,19 @@ impl Zfs for Real {
         self.run(&["mount", ds]).map(drop)
     }
 
+    fn unmount(&self, ds: &str) -> Result<()> {
+        self.run(&["unmount", ds]).map(drop)
+    }
+
+    fn local_props(&self, ds: &str) -> Result<Vec<(String, String)>> {
+        let out = self.run(&["get", "-Hp", "-s", "local", "-o", "property,value", "all", ds])?;
+        Ok(out
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect())
+    }
+
     fn destroy_recursive(&self, ds: &str) -> Result<()> {
         self.run(&["destroy", "-r", ds]).map(drop)
     }

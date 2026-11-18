@@ -244,6 +244,9 @@ pub fn backup(
         if let Some(r) = ready.resume {
             let snap = cx.snaps()?.into_iter().find(|s| s.guid == r.toguid && cx.eligible(s));
             let base_guid = base.as_ref().map_or(0, |b| b.guid);
+            // The resume fields come from the server and are untrusted: only a snapshot
+            // and base this client holds are resumed, always with the client's own flags;
+            // anything else makes the server discard its partial receive.
             match snap {
                 Some(snap) if r.fromguid == base_guid && r.raw == src.raw => {
                     log::info!("{source}: resuming {}@{} at object {} offset {}", ds, snap.name, r.object, r.offset);
@@ -296,6 +299,74 @@ pub fn backup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+    use strata_proto::local::LocalSock;
+    use strata_zfs::Fake;
+
+    /// A network half that offers `resume` once and records what the ZFS half asks for.
+    fn fake_net(resume: ResumePoint) -> (NetClient, std::thread::JoinHandle<Vec<String>>) {
+        let (a, b) = LocalSock::pair().unwrap();
+        let t = std::thread::spawn(move || {
+            let mut log = Vec::new();
+            let reply = |r: CResp| b.send(&r.encode().unwrap(), &[]).unwrap();
+            while let Some(m) = b.recv().unwrap() {
+                let req = CReq::decode(&m.msg).unwrap();
+                log.push(format!("{req:?}"));
+                match req {
+                    CReq::Backup { .. } => reply(CResp::Ready { server_gen: 0, head: None, resume: Some(resume) }),
+                    CReq::DiscardResume => reply(CResp::Ready { server_gen: 0, head: None, resume: None }),
+                    CReq::Stream => {
+                        let mut f = std::fs::File::from(m.fds.into_iter().next().unwrap());
+                        let mut v = Vec::new();
+                        f.read_to_end(&mut v).unwrap();
+                        log.push(format!("streamed {} bytes", v.len()));
+                    }
+                    CReq::StreamDone { .. } => reply(CResp::Committed { snapshot: "strata-20260101T000000Z-g1".into() }),
+                    _ => reply(CResp::Ok),
+                }
+            }
+            log
+        });
+        (NetClient::new(a), t)
+    }
+
+    fn setup() -> (tempfile::TempDir, Fake, SourceConfig) {
+        let t = tempfile::tempdir().unwrap();
+        let z = Fake::open(t.path()).unwrap();
+        z.create_pool("rpool").unwrap();
+        z.create("rpool/home", &[]).unwrap();
+        z.write_object("rpool/home", 1, b"data").unwrap();
+        let src = SourceConfig {
+            dataset: "rpool/home".into(),
+            interval: None,
+            create_snapshots: true,
+            snapshot_pattern: None,
+            raw: false,
+        };
+        (t, z, src)
+    }
+
+    #[test]
+    fn untrusted_resume_points_start_the_send_over() {
+        // Each case names a leftover own snapshot by GUID but gets another field wrong:
+        // an unknown snapshot, a base the client never had, or the other raw mode.
+        let cases: [fn(u64) -> ResumePoint; 3] = [
+            |_| ResumePoint { fromguid: 0, toguid: 0xbad, object: 1, offset: 0, raw: false },
+            |mine| ResumePoint { fromguid: 0x1234, toguid: mine, object: 1, offset: 0, raw: false },
+            |mine| ResumePoint { fromguid: 0, toguid: mine, object: 1, offset: 0, raw: true },
+        ];
+        for case in cases {
+            let (_t, z, src) = setup();
+            z.snapshot(&[format!("rpool/home@{}", own_snapshot_name("home", 1))], &[]).unwrap();
+            let r = case(z.snapshots("rpool/home", &[]).unwrap()[0].guid);
+            let (net, t) = fake_net(r);
+            let out = backup(&z, &net, "home", &src, None, 0.0).unwrap();
+            drop(net);
+            let log = t.join().unwrap();
+            assert_eq!(out.committed.len(), 1);
+            assert!(log.iter().any(|l| l == "DiscardResume"), "{r:?} was not discarded: {log:?}");
+        }
+    }
 
     #[test]
     fn names_are_unambiguous() {

@@ -7,7 +7,7 @@ use std::io::BufRead;
 use anyhow::{Context, bail};
 use strata_proto::msg::SnapshotInfo;
 use strata_proto::names::{utc_compact, utc_readable};
-use strata_zfs::{RecvOpts, Zfs};
+use strata_zfs::{DsType, RecvOpts, Zfs};
 
 use crate::config::SourceConfig;
 use crate::ipc::{CReq, CResp};
@@ -80,6 +80,12 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
     if zfs.exists(&target)? {
         bail!("{target} already exists; pick another --target");
     }
+    if o.replace && zfs.exists(ds)? {
+        let kids = zfs.children(ds)?;
+        if !kids.is_empty() {
+            bail!("{ds} has child datasets ({}); --replace would move them along with it. Restore into a separate --target instead", kids.join(", "));
+        }
+    }
     let mut origin = None;
     let mut from = None;
     if !o.full && zfs.exists(ds)? {
@@ -121,20 +127,82 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
         eprintln!("{target} is encrypted: run `zfs load-key {target}` and `zfs mount {target}`");
     }
     if o.replace {
-        if !zfs.exists(ds)? {
-            zfs.rename(&target, ds)?;
-            return Ok(ds.to_string());
-        }
-        let old = format!("{ds}-strata-old-{}", utc_compact(now()));
-        if !o.yes {
-            confirm(&format!("Replace {ds} with the restored copy? {ds} itself is kept as {old}."), ds)?;
-        }
-        zfs.rename(ds, &old)?;
-        zfs.rename(&target, ds)?;
-        eprintln!("{ds} now holds {}@{}; the previous contents are in {old}", o.source, s.name);
+        replace(zfs, ds, &target, o.yes)?;
+        eprintln!("{ds} now holds {}@{}", o.source, s.name);
         return Ok(ds.to_string());
     }
     Ok(target)
+}
+
+/// Properties that can't be set after creation, or that the restored stream already
+/// fixed (`volsize`): carrying them over would fail or undo the restore.
+const NOT_CARRIED: &[&str] = &[
+    "encryption",
+    "keyformat",
+    "pbkdf2iters",
+    "pbkdf2salt",
+    "casesensitivity",
+    "normalization",
+    "utf8only",
+    "volblocksize",
+    "volsize",
+];
+
+/// Swaps the restored `target` into `ds`'s place. Order: read `ds`'s local properties,
+/// unmount `ds` (a busy dataset stops everything here, before any change), set it
+/// `canmount=noauto` so it never mounts over the restored copy at boot, rename it aside,
+/// rename `target` into place, then carry the local properties over (received streams
+/// carry none, so without this a local `mountpoint` would be lost). A failed rename puts
+/// the original back.
+fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<()> {
+    if !zfs.exists(ds)? {
+        zfs.rename(target, ds)?;
+        return Ok(());
+    }
+    let old = format!("{ds}-strata-old-{}", utc_compact(now()));
+    if !yes {
+        confirm(&format!("Replace {ds} with the restored copy? {ds} itself is kept as {old}."), ds)?;
+    }
+    let props = zfs.local_props(ds)?;
+    let is_fs = zfs.dataset_type(ds)? == DsType::Filesystem;
+    if is_fs {
+        zfs.unmount(ds).map_err(|e| {
+            anyhow::anyhow!("{ds} can't be unmounted ({e}); nothing was changed. The restored copy is at {target}")
+        })?;
+    }
+    let undo = |renamed: bool| {
+        if renamed {
+            let _ = zfs.rename(&old, ds);
+        }
+        if is_fs {
+            let canmount = props.iter().find(|(k, _)| k == "canmount").map_or("on", |(_, v)| v.as_str());
+            let _ = zfs.set_props(ds, &[("canmount", canmount)]);
+            let _ = zfs.mount(ds);
+        }
+    };
+    if is_fs && let Err(e) = zfs.set_props(ds, &[("canmount", "noauto")]) {
+        undo(false);
+        bail!("setting canmount=noauto on {ds}: {e}; nothing was changed");
+    }
+    if let Err(e) = zfs.rename(ds, &old) {
+        undo(false);
+        bail!("renaming {ds} to {old}: {e}; nothing was changed");
+    }
+    if let Err(e) = zfs.rename(target, ds) {
+        undo(true);
+        bail!("renaming {target} to {ds}: {e}; {ds} was put back");
+    }
+    let mut failed = Vec::new();
+    for (k, v) in props.iter().filter(|(k, _)| !NOT_CARRIED.contains(&k.as_str())) {
+        if let Err(e) = zfs.set_props(ds, &[(k, v)]) {
+            failed.push(format!("{k}={v} ({e})"));
+        }
+    }
+    eprintln!("the previous contents of {ds} are in {old} (canmount=noauto); delete it with `zfs destroy -r {old}` once you no longer need it");
+    if !failed.is_empty() {
+        bail!("{ds} was replaced, but these properties could not be carried over: {}", failed.join(", "));
+    }
+    Ok(())
 }
 
 fn now() -> i64 {
