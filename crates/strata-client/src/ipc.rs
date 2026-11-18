@@ -30,6 +30,7 @@ pub enum CReq {
     StreamDone { ok: bool, interval_secs: Option<u64> },
     Restore { source: String, snapshot: String, from: Option<String>, fromguid: u64, toguid: u64 },
     Abort,
+    Rebase { source: String, snapshot: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +80,7 @@ impl CReq {
                 .u64(*toguid)
                 .finish(),
             CReq::Abort => Enc::new(9).finish(),
+            CReq::Rebase { source, snapshot } => Enc::new(10).str(source, NAME_MAX).str(snapshot, SNAP_MAX).finish(),
         }
     }
 
@@ -135,6 +137,7 @@ impl CReq {
                 toguid: d.u64()?,
             },
             9 => CReq::Abort,
+            10 => CReq::Rebase { source: d.str(NAME_MAX)?, snapshot: d.str(SNAP_MAX)? },
             _ => return Err(Malformed("unknown request tag")),
         };
         d.finish()?;

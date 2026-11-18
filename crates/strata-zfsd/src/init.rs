@@ -9,7 +9,7 @@ use strata_zfs::Zfs;
 
 use crate::config::ServerConfig;
 
-pub const ZFSD_PERMISSIONS: &str = "create,destroy,mount,receive,send,snapshot,rollback,clone,hold,release,userprop,readonly,recordsize,compression,checksum,dedup,direct";
+pub const ZFSD_PERMISSIONS: &str = "create,destroy,mount,receive,send,snapshot,rollback,clone,promote,hold,release,userprop,readonly,recordsize,compression,checksum,dedup,direct";
 
 fn ensure(zfs: &dyn Zfs, ds: &str, create_props: &[(&str, &str)]) -> anyhow::Result<()> {
     if !zfs.exists(ds)? {

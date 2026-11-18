@@ -296,7 +296,8 @@ impl World {
     }
 
     fn server_snaps(&self) -> anyhow::Result<Vec<strata_zfs::Snap>> {
-        Ok(strata_zfsd::ops::strata_snaps(&self.server, self.server_ds())?)
+        let set = strata_zfsd::ops::SourceSet::load(&self.server, "tank/strata/nas/ds", "home")?;
+        Ok(set.snaps.into_iter().map(|(_, s)| s).collect())
     }
 
     /// Checks the invariants every finished backup must leave behind.

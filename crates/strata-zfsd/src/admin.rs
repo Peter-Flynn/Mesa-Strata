@@ -8,7 +8,7 @@ use strata_proto::names::{utc_readable, valid_name};
 use strata_zfs::Zfs;
 
 use crate::config::ServerConfig;
-use crate::ops::{BASE_HOLD, now, strata_snaps};
+use crate::ops::{BASE_HOLD, REBASE_HOLD, SourceSet, member_source, now};
 
 pub struct SourceStatus {
     pub client: String,
@@ -46,16 +46,24 @@ pub fn collect(cfg: &ServerConfig, zfs: &dyn Zfs) -> anyhow::Result<Vec<SourceSt
         if !zfs.exists(&parent)? {
             continue;
         }
-        for ds in zfs.children(&parent)? {
-            let source = ds.rsplit('/').next().unwrap_or_default().to_string();
-            let snaps = strata_snaps(zfs, &ds)?;
-            let newest = snaps.last();
+        let names: std::collections::BTreeSet<String> = zfs
+            .children(&parent)?
+            .iter()
+            .filter_map(|c| member_source(c.rsplit('/').next().unwrap_or_default()).map(str::to_string))
+            .collect();
+        for source in names {
+            let set = SourceSet::load(zfs, &parent, &source)?;
+            let newest = set.head().map(|(_, s)| s);
+            let mut used = 0;
+            for m in &set.members {
+                used += zfs.get_prop(m, "used")?.and_then(|u| u.parse::<u64>().ok()).unwrap_or(0);
+            }
             out.push(SourceStatus {
                 configured: cfg.clients.contains_key(&client),
                 interval: newest.and_then(|s| s.props.get("strata:interval")).and_then(|v| v.parse().ok()),
                 newest: newest.map(|s| (s.name.clone(), s.creation)),
-                snapshots: snaps.len(),
-                used: zfs.get_prop(&ds, "used")?.and_then(|u| u.parse().ok()).unwrap_or(0),
+                snapshots: set.snaps.len(),
+                used,
                 client: client.clone(),
                 source,
             });
@@ -161,13 +169,13 @@ pub fn forget(cfg: &ServerConfig, zfs: &dyn Zfs, target: &str, yes: bool) -> any
     if !valid_name(client) || !valid_name(source) {
         bail!("invalid name {target:?}");
     }
-    let ds = cfg.source_ds(client, source);
-    if !zfs.exists(&ds)? {
-        bail!("{ds} does not exist");
+    let client_ds = cfg.client_ds(client);
+    let set = SourceSet::load(zfs, &client_ds, source)?;
+    if set.members.is_empty() {
+        bail!("{client_ds}/{source} does not exist");
     }
-    let snaps = zfs.snapshots(&ds, &[])?;
     if !yes {
-        eprint!("Destroy {ds} and all {} of its snapshots? Type the source name to confirm: ", snaps.len());
+        eprint!("Destroy {} and all {} of its snapshots? Type the source name to confirm: ", set.members.join(", "), set.snaps.len());
         std::io::stderr().flush()?;
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line)?;
@@ -175,12 +183,23 @@ pub fn forget(cfg: &ServerConfig, zfs: &dyn Zfs, target: &str, yes: bool) -> any
             bail!("not confirmed");
         }
     }
-    for s in &snaps {
+    for (ds, s) in &set.snaps {
         let full = format!("{ds}@{}", s.name);
-        if zfs.holds(&full)?.iter().any(|h| h == BASE_HOLD) {
-            zfs.release(&full, BASE_HOLD)?;
+        for h in zfs.holds(&full)? {
+            if h == BASE_HOLD || h == REBASE_HOLD {
+                zfs.release(&full, &h)?;
+            }
         }
     }
-    zfs.destroy_recursive(&ds)?;
+    let _ = zfs.inherit(&client_ds, &format!("strata:rebase:{source}"));
+    // Clones go before their origins; a pass that destroys nothing ends the loop.
+    let mut left = set.members.clone();
+    while !left.is_empty() {
+        let before = left.len();
+        left.retain(|m| zfs.destroy_recursive(m).is_err());
+        if left.len() == before {
+            bail!("could not destroy {}", left.join(", "));
+        }
+    }
     Ok(())
 }

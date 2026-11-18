@@ -305,6 +305,17 @@ fn session(mut s: Session, z: &Zfsd, client: &str) -> anyhow::Result<()> {
                 z.call(&ZReq::Abort)?;
                 return Ok(());
             }
+            Msg::Rebase { source, snapshot } => {
+                if backup.is_some() {
+                    bail!("Rebase during a backup");
+                }
+                log::info!("{client}: rebase of {source} onto {snapshot} requested");
+                let reply = match z.call(&ZReq::Rebase { source, snapshot })? {
+                    ZResp::Ok => Msg::Rebased,
+                    other => zresp_to_msg(other),
+                };
+                s.writer.send_now(&reply)?;
+            }
             Msg::BeginRestore { source, snapshot, mode } => {
                 if backup.is_some() {
                     bail!("BeginRestore during a backup");

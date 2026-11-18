@@ -276,6 +276,23 @@ impl Fake {
         objs.iter().map(|(k, o)| Ok((*k, self.blob(&o.blob)?))).collect()
     }
 
+    /// `zfs clone`, which zfsd never runs; tests use it to build clone trees.
+    pub fn clone_snapshot(&self, snap: &str, ds: &str) -> Result<()> {
+        self.with(|st| {
+            let s = st.snap(snap)?.clone();
+            let kind = st.ds(snap.split_once('@').unwrap().0)?.kind;
+            if st.datasets.contains_key(ds) {
+                return Err(ZfsError::Exists(ds.into()));
+            }
+            let mut d = Ds::new(kind);
+            d.objects = s.objects;
+            d.tombs = s.tombs;
+            d.origin = Some(snap.to_string());
+            st.datasets.insert(ds.to_string(), d);
+            Ok(())
+        })
+    }
+
     pub fn has_partial(&self, ds: &str) -> Result<bool> {
         self.with(|st| Ok(st.datasets.get(ds).is_some_and(|d| d.partial.is_some())))
     }
@@ -892,6 +909,53 @@ impl Zfs for Fake {
         self.with(|st| st.ds(ds).map(drop))
     }
 
+    fn promote(&self, ds: &str) -> Result<()> {
+        self.with(|st| {
+            let origin = st.ds(ds)?.origin.clone().ok_or_else(|| ZfsError::Failed(format!("{ds} is not a clone")))?;
+            let (od, oname) = origin.split_once('@').unwrap();
+            let (od, oname) = (od.to_string(), oname.to_string());
+            let txg = st.snap(&origin)?.createtxg;
+            let o = st.ds_mut(&od)?;
+            let moved: Vec<FSnap> = o.snaps.iter().filter(|s| s.createtxg <= txg).cloned().collect();
+            o.snaps.retain(|s| s.createtxg > txg);
+            let grand = o.origin.take();
+            for d in st.datasets.values_mut() {
+                if let Some(org) = &d.origin
+                    && let Some((odd, s)) = org.split_once('@')
+                    && odd == od
+                    && moved.iter().any(|m| m.name == s)
+                {
+                    d.origin = Some(format!("{ds}@{s}"));
+                }
+            }
+            st.ds_mut(&od)?.origin = Some(format!("{ds}@{oname}"));
+            let m = st.ds_mut(ds)?;
+            m.origin = grand;
+            m.snaps.extend(moved);
+            m.snaps.sort_by_key(|s| s.createtxg);
+            Ok(())
+        })
+    }
+
+    fn inherit(&self, ds: &str, prop: &str) -> Result<()> {
+        self.with(|st| {
+            st.ds_mut(ds)?.props.remove(prop);
+            Ok(())
+        })
+    }
+
+    fn destroy(&self, ds: &str) -> Result<()> {
+        self.with(|st| {
+            let d = st.ds(ds)?;
+            let prefix = format!("{ds}/");
+            if !d.snaps.is_empty() || st.datasets.keys().any(|k| k.starts_with(&prefix)) {
+                return Err(ZfsError::Exists(format!("{ds} has children")));
+            }
+            st.datasets.remove(ds);
+            Ok(())
+        })
+    }
+
     /// The fake has no mounts; a dataset with the test property `fake:busy=on` fails to
     /// unmount, standing in for one with open files.
     fn unmount(&self, ds: &str) -> Result<()> {
@@ -996,6 +1060,30 @@ mod tests {
         rx.job.wait().unwrap();
         assert_eq!(b.content("tank/d@r").unwrap(), a.content("rpool/d@s").unwrap());
         assert!(b.get_prop("tank/d", "receive_resume_token").unwrap().is_none());
+    }
+
+    #[test]
+    fn promote_moves_history_into_the_clone() {
+        let t = tempfile::tempdir().unwrap();
+        let z = Fake::open(t.path()).unwrap();
+        z.create_pool("p").unwrap();
+        z.create("p/a", &[]).unwrap();
+        for n in ["1", "2", "3"] {
+            z.snapshot(&[format!("p/a@{n}")], &[]).unwrap();
+        }
+        z.clone_snapshot("p/a@2", "p/b").unwrap();
+        z.snapshot(&["p/b@4".into()], &[]).unwrap();
+        assert!(z.destroy_snapshots(&["p/a@2".into()]).unwrap().len() == 1, "origin can't go");
+        z.promote("p/b").unwrap();
+        let names = |d: &str| z.snapshots(d, &[]).unwrap().into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names("p/b"), vec!["1", "2", "4"]);
+        assert_eq!(names("p/a"), vec!["3"]);
+        assert_eq!(z.get_prop("p/a", "origin").unwrap().as_deref(), Some("p/b@2"));
+        assert_eq!(z.get_prop("p/b", "origin").unwrap(), None);
+        assert!(z.destroy("p/a").is_err(), "a still has a snapshot");
+        z.destroy_snapshots(&["p/a@3".into()]).unwrap();
+        z.destroy("p/a").unwrap();
+        assert!(z.destroy_snapshots(&["p/b@2".into()]).unwrap().is_empty(), "no clone left on 2");
     }
 
     #[test]

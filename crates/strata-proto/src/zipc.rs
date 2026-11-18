@@ -29,6 +29,7 @@ pub enum ZReq {
     Abort,
     BeginRestore { source: String, snapshot: String, from: Option<String> },
     RestoreStatus,
+    Rebase { source: String, snapshot: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +190,7 @@ impl ZReq {
                 .opt_str(from.as_deref(), SNAP_MAX)
                 .finish(),
             ZReq::RestoreStatus => Enc::new(13).finish(),
+            ZReq::Rebase { source, snapshot } => Enc::new(14).str(source, NAME_MAX).str(snapshot, SNAP_MAX).finish(),
         }
     }
 
@@ -208,6 +210,7 @@ impl ZReq {
             11 => ZReq::Abort,
             12 => ZReq::BeginRestore { source: d.str(NAME_MAX)?, snapshot: d.str(SNAP_MAX)?, from: d.opt_str(SNAP_MAX)? },
             13 => ZReq::RestoreStatus,
+            14 => ZReq::Rebase { source: d.str(NAME_MAX)?, snapshot: d.str(SNAP_MAX)? },
             _ => return Err(Malformed("unknown request tag")),
         };
         d.finish()?;
@@ -322,6 +325,7 @@ mod tests {
             ZReq::Commit { generation: 4, interval_secs: None },
             ZReq::BeginRestore { source: "home".into(), snapshot: "s".into(), from: Some("t".into()) },
             ZReq::RestoreStatus,
+            ZReq::Rebase { source: "home".into(), snapshot: "strata-x-g2".into() },
         ];
         for r in reqs {
             assert_eq!(ZReq::decode(&r.encode().unwrap()).unwrap(), r);

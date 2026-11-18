@@ -117,6 +117,13 @@ pub enum Msg {
         code: ErrorCode,
         message: String,
     },
+    /// After a restore: the client's data is now `snapshot`, and its next backup is based
+    /// on it.
+    Rebase {
+        source: String,
+        snapshot: String,
+    },
+    Rebased,
 }
 
 pub const MAX_MSG: usize = 1 << 20;

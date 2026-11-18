@@ -36,6 +36,7 @@ mod ffi {
         pub fn lzc_destroy_snaps(snaps: *mut nvlist_t, defer: c_int, errlist: *mut *mut nvlist_t) -> c_int;
         pub fn lzc_bookmark(bookmarks: *mut nvlist_t, errlist: *mut *mut nvlist_t) -> c_int;
         pub fn lzc_destroy_bookmarks(bookmarks: *mut nvlist_t, errlist: *mut *mut nvlist_t) -> c_int;
+        pub fn lzc_destroy(fsname: *const c_char) -> c_int;
         pub fn lzc_send_resume(
             snapname: *const c_char,
             from: *const c_char,
@@ -224,6 +225,17 @@ mod imp {
         first_error(with_errlist(&bookmarks.join(" "), |e| unsafe { lzc_destroy_bookmarks(b.0, e) }))
     }
 
+    pub fn destroy(fs: &str) -> Result<(), ZfsError> {
+        init()?;
+        let n = cstr(fs)?;
+        // SAFETY: n is NUL-terminated and outlives the call.
+        let rc = unsafe { lzc_destroy(n.as_ptr()) };
+        if rc != 0 {
+            return Err(errno_err(fs, rc));
+        }
+        Ok(())
+    }
+
     pub fn send(
         snap: &str,
         from: Option<&str>,
@@ -281,6 +293,9 @@ mod imp {
         Err(ZfsError::Unsupported)
     }
     pub fn destroy_bookmarks(_: &[String]) -> Result<(), ZfsError> {
+        Err(ZfsError::Unsupported)
+    }
+    pub fn destroy(_: &str) -> Result<(), ZfsError> {
         Err(ZfsError::Unsupported)
     }
     pub fn send(_: &str, _: Option<&str>, _: SendFlags, _: Option<(u64, u64)>, _: &OwnedFd) -> Result<(), ZfsError> {

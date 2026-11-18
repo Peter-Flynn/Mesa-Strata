@@ -147,6 +147,12 @@ pub trait Zfs: Send + Sync {
     fn rename(&self, from: &str, to: &str) -> Result<()>;
     /// `zfs mount`; needs root on Linux.
     fn mount(&self, ds: &str) -> Result<()>;
+    /// `zfs promote`: the clone takes over its origin's snapshots up to the origin.
+    fn promote(&self, ds: &str) -> Result<()>;
+    /// `zfs inherit`, which also removes a user property.
+    fn inherit(&self, ds: &str, prop: &str) -> Result<()>;
+    /// Destroys a dataset that has no snapshots and no children.
+    fn destroy(&self, ds: &str) -> Result<()>;
     /// `zfs unmount`; fails with `Busy` while files are open.
     fn unmount(&self, ds: &str) -> Result<()>;
     /// Properties set locally on `ds` (`zfs get -s local`), user properties included.

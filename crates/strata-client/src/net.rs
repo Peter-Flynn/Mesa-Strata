@@ -187,6 +187,10 @@ pub fn serve(local: LocalSock, settings: Option<Settings>) -> anyhow::Result<()>
                 }
             }
             CReq::StreamDone { .. } => bail!("StreamDone without Stream"),
+            CReq::Rebase { source, snapshot } => match remote(s.call(&Msg::Rebase { source, snapshot }))? {
+                Msg::Rebased => reply(&local, CResp::Ok)?,
+                other => reply(&local, msg_to_resp(other))?,
+            },
             CReq::Abort => {
                 let _ = s.writer.send_now(&Msg::Abort);
                 sess = None;

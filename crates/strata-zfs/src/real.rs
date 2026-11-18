@@ -233,6 +233,18 @@ impl Zfs for Real {
         self.run(&["mount", ds]).map(drop)
     }
 
+    fn promote(&self, ds: &str) -> Result<()> {
+        self.run(&["promote", ds]).map(drop)
+    }
+
+    fn inherit(&self, ds: &str, prop: &str) -> Result<()> {
+        self.run(&["inherit", prop, ds]).map(drop)
+    }
+
+    fn destroy(&self, ds: &str) -> Result<()> {
+        lzc::destroy(ds)
+    }
+
     fn unmount(&self, ds: &str) -> Result<()> {
         self.run(&["unmount", ds]).map(drop)
     }

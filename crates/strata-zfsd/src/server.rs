@@ -27,7 +27,10 @@ use strata_zfs::{Job, RecvOpts, SendFlags, Zfs};
 
 use crate::auth::{Backoff, Key, peer_of};
 use crate::config::ServerConfig;
-use crate::ops::{finalize_head, kind_matches, kind_of, now, prune, snapshot_info, source_state, strata_snaps};
+use crate::ops::{
+    SourceSet, finalize_head, finalize_rebase, full, is_ancestor, kind_matches, kind_of, member_source, now, prune,
+    set_rebase, sibling, snapshot_info,
+};
 
 const BUSY_RETRY_MS: u32 = 30_000;
 
@@ -90,10 +93,13 @@ struct PendingHello {
 struct Backup {
     _slot: Slot,
     source: String,
-    ds: String,
     generation: u64,
-    head_guid: u64,
-    resume: Option<ResumePoint>,
+    /// GUID the next stream must be based on: the head's, or the rebase base's.
+    base_guid: u64,
+    /// Dataset holding the base snapshot, when a pending rebase receives a clone of it.
+    rebase_base: Option<String>,
+    head_ds: Option<String>,
+    resume: Option<(String, ResumePoint)>,
     recv: Option<(Job, String)>,
 }
 
@@ -160,7 +166,7 @@ impl Conn {
         {
             job.kill();
             let _ = job.wait();
-            log::info!("{}: backup into {}@{snap} abandoned", b.source, b.ds);
+            log::info!("{}: backup into {snap} abandoned", b.source);
         }
         if let Some(r) = self.restore.take() {
             let _ = r.job.wait();
@@ -206,6 +212,7 @@ impl Conn {
                 one(ZResp::Ok)
             }
             ZReq::BeginRestore { source, snapshot, from } => self.begin_restore(&source, &snapshot, from.as_deref()),
+            ZReq::Rebase { source, snapshot } => self.rebase(&source, &snapshot),
             ZReq::RestoreStatus => {
                 let r = self.restore.take().ok_or("no restore running")?;
                 match r.job.wait() {
@@ -305,19 +312,18 @@ impl Conn {
         one(ZResp::Authenticated { psk })
     }
 
-    fn source_ds(&self, source: &str) -> Result<String, String> {
+    fn source_set(&self, source: &str) -> Result<SourceSet, String> {
         let client = self.authed()?;
         if !valid_name(source) {
             return Err(format!("invalid source name {source:?}"));
         }
-        Ok(self.srv.cfg.source_ds(client, source))
+        SourceSet::load(&*self.srv.zfs, &self.srv.cfg.client_ds(client), source).map_err(|e| e.to_string())
     }
 
     fn list_sources(&self) -> Result<Reply, String> {
-        let client = self.authed()?;
+        let client = self.authed()?.to_string();
         let zfs = &*self.srv.zfs;
-        let parent = self.srv.cfg.client_ds(client);
-        let mut out = Vec::new();
+        let parent = self.srv.cfg.client_ds(&client);
         let children = match zfs.exists(&parent) {
             Ok(true) => zfs.children(&parent).map_err(|e| e.to_string()),
             Ok(false) => Ok(Vec::new()),
@@ -327,18 +333,20 @@ impl Conn {
             Ok(c) => c,
             Err(e) => return err(ErrorCode::Internal, e),
         };
-        for ds in children {
-            let name = ds.rsplit('/').next().unwrap_or_default().to_string();
-            if !valid_name(&name) {
-                continue;
-            }
-            let (Ok(t), Ok(snaps)) = (zfs.dataset_type(&ds), strata_snaps(zfs, &ds)) else { continue };
+        let names: std::collections::BTreeSet<String> = children
+            .iter()
+            .filter_map(|c| member_source(c.rsplit('/').next().unwrap_or_default()).map(str::to_string))
+            .collect();
+        let mut out = Vec::new();
+        for name in names {
+            let Ok(set) = SourceSet::load(zfs, &parent, &name) else { continue };
+            let Ok(Some(t)) = set.kind(zfs) else { continue };
             out.push((
                 ZResp::Source {
-                    name,
                     kind: kind_of(t),
-                    snapshots: snaps.len() as u32,
-                    newest: snaps.last().map(snapshot_info),
+                    snapshots: set.snaps.len() as u32,
+                    newest: set.head().map(|(_, s)| snapshot_info(s)),
+                    name,
                 },
                 None,
             ));
@@ -348,59 +356,66 @@ impl Conn {
     }
 
     fn list_snapshots(&self, source: &str) -> Result<Reply, String> {
-        let ds = self.source_ds(source)?;
-        let zfs = &*self.srv.zfs;
-        match zfs.exists(&ds) {
-            Ok(true) => {}
-            Ok(false) => return err(ErrorCode::NotFound, format!("no source {source}")),
-            Err(e) => return err(ErrorCode::Internal, e.to_string()),
-        }
-        let snaps = match strata_snaps(zfs, &ds) {
+        let set = match self.source_set(source) {
             Ok(s) => s,
-            Err(e) => return err(ErrorCode::Internal, e.to_string()),
+            Err(e) => return err(ErrorCode::Internal, e),
         };
-        let mut out: Reply = snaps.iter().map(|s| (ZResp::Snapshot(snapshot_info(s)), None)).collect();
+        if set.members.is_empty() {
+            return err(ErrorCode::NotFound, format!("no source {source}"));
+        }
+        let mut out: Reply = set.snaps.iter().map(|(_, s)| (ZResp::Snapshot(snapshot_info(s)), None)).collect();
         out.push((ZResp::ListEnd, None));
         Ok(out)
     }
 
     fn ready(&mut self) -> Result<Reply, String> {
+        let client = self.client.clone().unwrap();
+        let client_ds = self.srv.cfg.client_ds(&client);
         let b = self.backup.as_mut().unwrap();
         let zfs = &*self.srv.zfs;
-        let st = match source_state(zfs, &b.ds) {
-            Ok(s) => s,
+        let loaded = (|| -> anyhow::Result<_> {
+            let pending = finalize_rebase(zfs, &client_ds, &b.source)?;
+            let set = SourceSet::load(zfs, &client_ds, &b.source)?;
+            let resume = set.resume(zfs)?;
+            Ok((pending, set, resume))
+        })();
+        let (pending, set, resume) = match loaded {
+            Ok(x) => x,
             Err(e) => {
                 self.backup = None;
                 return err(ErrorCode::Internal, e.to_string());
             }
         };
-        if let Err(e) = finalize_head(zfs, &b.ds, &st.snaps) {
-            log::warn!("{}: repairing holds: {e}", b.ds);
+        if let Err(e) = finalize_head(zfs, &set) {
+            log::warn!("{client_ds}/{}: repairing holds: {e}", b.source);
         }
-        b.generation = st.generation;
-        b.head_guid = st.head().map_or(0, |h| h.guid);
-        b.resume = st.resume;
+        let head = set.head();
+        let shown = pending.as_ref().or(head);
+        b.generation = set.generation();
+        b.base_guid = shown.map_or(0, |(_, s)| s.guid);
+        b.rebase_base = pending.as_ref().map(|(ds, s)| full(ds, &s.name));
+        b.head_ds = head.map(|(ds, _)| ds.clone());
+        b.resume = resume;
         one(ZResp::Ready {
-            server_gen: st.generation,
-            head: st.head().map(|h| (h.name.clone(), h.guid)),
-            resume: st.resume,
+            server_gen: set.generation(),
+            head: shown.map(|(_, s)| (s.name.clone(), s.guid)),
+            resume: b.resume.as_ref().map(|(_, r)| *r),
         })
     }
 
     fn begin_backup(&mut self, source: String, kind: SourceKind) -> Result<Reply, String> {
-        let ds = self.source_ds(&source)?;
+        let set = self.source_set(&source)?;
         if self.backup.is_some() || self.restore.is_some() {
             return Err("a session is already open".into());
         }
         let client = self.client.clone().unwrap();
         let zfs = &*self.srv.zfs;
-        match zfs.exists(&self.srv.cfg.client_ds(&client)) {
+        match zfs.exists(&set.client_ds) {
             Ok(true) => {}
             Ok(false) => return err(ErrorCode::NotFound, format!("no dataset tree for client {client}; strata-init creates it")),
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         }
-        if let Ok(true) = zfs.exists(&ds)
-            && let Ok(t) = zfs.dataset_type(&ds)
+        if let Ok(Some(t)) = set.kind(zfs)
             && !kind_matches(kind, t)
         {
             return err(ErrorCode::Conflict, format!("source {source} is stored as a {t:?}, not a {kind:?}"));
@@ -409,7 +424,16 @@ impl Conn {
             return one(ZResp::Busy { retry_after_ms: BUSY_RETRY_MS });
         };
         fault::point("zfsd.begin");
-        self.backup = Some(Backup { _slot: slot, source, ds, generation: 0, head_guid: 0, resume: None, recv: None });
+        self.backup = Some(Backup {
+            _slot: slot,
+            source,
+            generation: 0,
+            base_guid: 0,
+            rebase_base: None,
+            head_ds: None,
+            resume: None,
+            recv: None,
+        });
         self.ready()
     }
 
@@ -418,8 +442,8 @@ impl Conn {
         if b.recv.is_some() {
             return Err("receive already started".into());
         }
-        if b.resume.is_some()
-            && let Err(e) = self.srv.zfs.receive_abort(&b.ds)
+        if let Some((ds, _)) = &b.resume
+            && let Err(e) = self.srv.zfs.receive_abort(ds)
         {
             return err(ErrorCode::Internal, e.to_string());
         }
@@ -427,41 +451,54 @@ impl Conn {
     }
 
     fn start_receive(&mut self) -> Result<Reply, String> {
+        let client = self.client.clone().unwrap();
+        let client_ds = self.srv.cfg.client_ds(&client);
         let b = self.backup.as_mut().ok_or("no backup session")?;
         if b.recv.is_some() {
             return Err("receive already started".into());
         }
-        let snap = server_snapshot_name(now(), b.generation + 1);
-        let expected_fromguid = b.resume.map_or(b.head_guid, |r| r.fromguid);
-        let opts = RecvOpts {
+        let generation = b.generation + 1;
+        let snap = server_snapshot_name(now(), generation);
+        let mut opts = RecvOpts {
             resumable: true,
             no_mount: true,
             props: vec![("readonly".into(), "on".into())],
             origin: None,
         };
-        let rx = match self.srv.zfs.receive(&format!("{}@{snap}", b.ds), &opts) {
+        let (target_ds, expected_fromguid) = match (&b.resume, &b.rebase_base, &b.head_ds) {
+            (Some((ds, r)), _, _) => (ds.clone(), r.fromguid),
+            (None, Some(base), _) => {
+                opts.origin = Some(base.clone());
+                (sibling(&client_ds, &b.source, generation), b.base_guid)
+            }
+            (None, None, Some(head)) => (head.clone(), b.base_guid),
+            (None, None, None) => (format!("{client_ds}/{}", b.source), 0),
+        };
+        let target = full(&target_ds, &snap);
+        let rx = match self.srv.zfs.receive(&target, &opts) {
             Ok(r) => r,
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         };
         fault::point("zfsd.receive.started");
-        b.recv = Some((rx.job, snap));
+        b.recv = Some((rx.job, target));
         // zfsd keeps no copy of the write end: once netd closes it, `zfs receive` sees EOF.
         Ok(vec![(ZResp::ReceiveReady { expected_fromguid }, Some(rx.stdin))])
     }
 
     fn commit(&mut self, generation: u64, interval: Option<u64>) -> Result<Reply, String> {
         let mut b = self.backup.take().ok_or("no backup session")?;
-        let (job, snap) = b.recv.take().ok_or("nothing was received")?;
+        let (job, target) = b.recv.take().ok_or("nothing was received")?;
         if let Err(e) = job.wait() {
-            log::warn!("{}: receive failed: {e}", b.ds);
+            log::warn!("{target}: receive failed: {e}");
             return err(ErrorCode::Validation, format!("zfs receive failed: {e}"));
         }
         fault::point("zfsd.commit.received");
         if generation != b.generation + 1 {
-            log::warn!("{}: client committed generation {generation}, server assigned {}", b.ds, b.generation + 1);
+            log::warn!("{target}: client committed generation {generation}, server assigned {}", b.generation + 1);
         }
+        let client = self.client.clone().unwrap();
+        let client_ds = self.srv.cfg.client_ds(&client);
         let zfs = &*self.srv.zfs;
-        let full = format!("{}@{snap}", b.ds);
         let gen_s = (b.generation + 1).to_string();
         let time_s = now().to_string();
         let interval_s = interval.map(|i| i.to_string());
@@ -469,52 +506,73 @@ impl Conn {
         if let Some(i) = &interval_s {
             props.push(("strata:interval", i));
         }
-        if let Err(e) = zfs.set_props(&full, &props) {
-            log::warn!("{full}: setting properties: {e}");
+        if let Err(e) = zfs.set_props(&target, &props) {
+            log::warn!("{target}: setting properties: {e}");
         }
         fault::point("zfsd.commit.props");
-        let snaps = match strata_snaps(zfs, &b.ds) {
+        if let Err(e) = finalize_rebase(zfs, &client_ds, &b.source) {
+            log::warn!("{client_ds}/{}: completing the rebase: {e}", b.source);
+        }
+        let set = match SourceSet::load(zfs, &client_ds, &b.source) {
             Ok(s) => s,
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         };
-        if let Err(e) = finalize_head(zfs, &b.ds, &snaps) {
-            log::warn!("{}: holds: {e}", b.ds);
+        if let Err(e) = finalize_head(zfs, &set) {
+            log::warn!("{client_ds}/{}: holds: {e}", b.source);
         }
         fault::point("zfsd.commit.held");
-        let client = self.client.clone().unwrap();
-        match prune(zfs, &b.ds, self.srv.cfg.retention(&client), now()) {
-            Ok(gone) if !gone.is_empty() => log::info!("{}: retention destroyed {}", b.ds, gone.join(" ")),
+        match prune(zfs, &set, self.srv.cfg.retention(&client), now()) {
+            Ok(gone) if !gone.is_empty() => log::info!("{client_ds}/{}: retention destroyed {}", b.source, gone.join(" ")),
             Ok(_) => {}
-            Err(e) => log::warn!("{}: retention: {e}", b.ds),
+            Err(e) => log::warn!("{client_ds}/{}: retention: {e}", b.source),
         }
         fault::point("zfsd.commit.pruned");
-        log::info!("{full}: committed");
+        log::info!("{target}: committed");
+        let snap = target.split_once('@').map(|x| x.1.to_string()).unwrap_or_default();
         one(ZResp::Committed { snapshot: snap })
     }
 
+    fn rebase(&mut self, source: &str, snapshot: &str) -> Result<Reply, String> {
+        let set = self.source_set(source)?;
+        if self.backup.is_some() || self.restore.is_some() {
+            return Err("a session is already open".into());
+        }
+        let client = self.client.clone().unwrap();
+        let Some(_slot) = self.srv.acquire(&client, source) else {
+            return one(ZResp::Busy { retry_after_ms: BUSY_RETRY_MS });
+        };
+        if set.find(snapshot).is_none() {
+            return err(ErrorCode::NotFound, format!("no snapshot {snapshot} of {source}"));
+        }
+        match set_rebase(&*self.srv.zfs, &set, snapshot) {
+            Ok(()) => {
+                log::info!("{client}/{source}: next backup rebases onto {snapshot}");
+                one(ZResp::Ok)
+            }
+            Err(e) => err(ErrorCode::Internal, e.to_string()),
+        }
+    }
+
     fn begin_restore(&mut self, source: &str, snapshot: &str, from: Option<&str>) -> Result<Reply, String> {
-        let ds = self.source_ds(source)?;
+        let set = self.source_set(source)?;
         if self.backup.is_some() || self.restore.is_some() {
             return Err("a session is already open".into());
         }
         let zfs = &*self.srv.zfs;
-        let snaps = match zfs.exists(&ds) {
-            Ok(true) => strata_snaps(zfs, &ds).map_err(|e| e.to_string()),
-            Ok(false) => return err(ErrorCode::NotFound, format!("no source {source}")),
-            Err(e) => Err(e.to_string()),
-        };
-        let snaps = match snaps {
-            Ok(s) => s,
-            Err(e) => return err(ErrorCode::Internal, e),
-        };
-        let Some(to) = snaps.iter().find(|s| s.name == snapshot) else {
+        if set.members.is_empty() {
+            return err(ErrorCode::NotFound, format!("no source {source}"));
+        }
+        let Some((to_ds, to)) = set.find(snapshot) else {
             return err(ErrorCode::NotFound, format!("no snapshot {snapshot} of {source}"));
         };
         let from_snap = match from {
             None => None,
-            Some(f) => match snaps.iter().find(|s| s.name == f) {
-                Some(s) if s.createtxg < to.createtxg => Some(s),
-                Some(_) => return err(ErrorCode::BadRequest, format!("{f} is not older than {snapshot}")),
+            Some(f) => match set.find(f) {
+                Some((fds, fs)) => match is_ancestor(zfs, to_ds, to.createtxg, fs.guid) {
+                    Ok(true) => Some((fds, fs)),
+                    Ok(false) => return err(ErrorCode::Conflict, format!("{f} is not an ancestor of {snapshot}")),
+                    Err(e) => return err(ErrorCode::Internal, e.to_string()),
+                },
                 None => return err(ErrorCode::NotFound, format!("no snapshot {f} of {source}")),
             },
         };
@@ -522,17 +580,17 @@ impl Conn {
         let Some(slot) = self.srv.acquire(&client, source) else {
             return one(ZResp::Busy { retry_after_ms: BUSY_RETRY_MS });
         };
-        let raw = zfs.get_prop(&ds, "encryption").ok().flatten().is_some_and(|e| e != "off");
+        let raw = zfs.get_prop(to_ds, "encryption").ok().flatten().is_some_and(|e| e != "off");
         let (r, w) = match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
             Ok(p) => p,
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         };
-        let from_full = from_snap.map(|s| format!("{ds}@{}", s.name));
-        let job = match zfs.send(&format!("{ds}@{snapshot}"), from_full.as_deref(), SendFlags::standard(raw), None, w) {
+        let from_full = from_snap.map(|(d, s)| full(d, &s.name));
+        let job = match zfs.send(&full(to_ds, snapshot), from_full.as_deref(), SendFlags::standard(raw), None, w) {
             Ok(j) => j,
             Err(e) => return err(ErrorCode::Internal, e.to_string()),
         };
         self.restore = Some(Restore { _slot: slot, job });
-        Ok(vec![(ZResp::RestoreReady { fromguid: from_snap.map_or(0, |s| s.guid), toguid: to.guid }, Some(r))])
+        Ok(vec![(ZResp::RestoreReady { fromguid: from_snap.map_or(0, |(_, s)| s.guid), toguid: to.guid }, Some(r))])
     }
 }
