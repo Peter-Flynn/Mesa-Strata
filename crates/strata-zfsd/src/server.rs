@@ -269,13 +269,13 @@ impl Conn {
             }
             log::info!("{peer}: client {client} connected without authentication (insecure)");
             self.client = Some(client);
-            return one(ZResp::HelloOk { version, server_id: self.srv.server_id, nonce: nonce_s, authenticated: true });
+            return one(ZResp::HelloOk { version, server_id: self.srv.server_id, nonce: nonce_s, insecure: true });
         }
         if !self.srv.keys.contains_key(&client) {
             return self.reject(RejectReason::Internal, 0);
         }
         self.hello = Some(PendingHello { client, nonce_c, nonce_s });
-        one(ZResp::HelloOk { version, server_id: self.srv.server_id, nonce: nonce_s, authenticated: false })
+        one(ZResp::HelloOk { version, server_id: self.srv.server_id, nonce: nonce_s, insecure: false })
     }
 
     fn cpace_a(&mut self, ya: [u8; 32]) -> Result<Reply, String> {

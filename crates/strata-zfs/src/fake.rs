@@ -365,14 +365,14 @@ struct Apply {
 }
 
 impl Apply {
-    fn record(&mut self, h: &[u8], payload: &[u8], txg: u64) {
+    fn record(&mut self, h: &[u8], payload: &[u8]) {
         match u32_at(h, 0) {
             DRR_OBJECT => {
                 let id = u64_at(h, 8);
                 let len = u64::from_le_bytes(payload[..8].try_into().unwrap());
                 self.lengths.insert(id, len);
-                let o = self.objects.entry(id).or_insert(Live { data: Vec::new(), birth: txg });
-                o.birth = txg;
+                let o = self.objects.entry(id).or_insert(Live { data: Vec::new(), birth: RECEIVING_TXG });
+                o.birth = RECEIVING_TXG;
                 self.dirty.insert(id);
                 self.tombs.remove(&id);
                 self.resume = (id, 0);
@@ -380,7 +380,7 @@ impl Apply {
             DRR_WRITE => {
                 let id = u64_at(h, 8);
                 let off = u64_at(h, 24) as usize;
-                let o = self.objects.entry(id).or_insert(Live { data: Vec::new(), birth: txg });
+                let o = self.objects.entry(id).or_insert(Live { data: Vec::new(), birth: RECEIVING_TXG });
                 self.dirty.insert(id);
                 if o.data.len() < off + payload.len() {
                     o.data.resize(off + payload.len(), 0);
@@ -395,7 +395,7 @@ impl Apply {
                     self.refs.remove(&id);
                     self.dirty.remove(&id);
                     if self.objects.remove(&id).is_some() || n == 1 {
-                        self.tombs.insert(id, txg);
+                        self.tombs.insert(id, RECEIVING_TXG);
                     }
                 }
             }
@@ -439,6 +439,10 @@ fn split_records(buf: &[u8], mut f: impl FnMut(&[u8], &[u8])) {
         pos += HEADER + plen;
     }
 }
+
+/// Birth txg of objects and frees a receive applies; replaced with the receiving snapshot's
+/// txg when it commits. Real txgs start at 1.
+const RECEIVING_TXG: u64 = 0;
 
 fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -> Result<()> {
     let (ds, snapname) = match target.split_once('@') {
@@ -516,7 +520,6 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
     let mut buf = vec![0u8; 64 * 1024];
     let mut records = 0usize;
     let mut bytes = start_bytes;
-    let txg_hint = 0;
     let save_partial = |apply: &mut Apply, bytes: u64| -> Result<()> {
         if !opts.resumable {
             return Ok(());
@@ -569,7 +572,7 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
         split_records(&pending, |h, p| {
             consumed += HEADER + p.len();
             records += 1;
-            apply.record(h, p, txg_hint);
+            apply.record(h, p);
         });
         pending.drain(..consumed);
         if records >= CHECKPOINT_RECORDS {
@@ -592,14 +595,14 @@ fn receive_thread(fake: Fake, target: String, opts: RecvOpts, mut input: File) -
         let objects: Content = objects
             .into_iter()
             .map(|(k, mut o)| {
-                if o.birth == txg_hint {
+                if o.birth == RECEIVING_TXG {
                     o.birth = txg;
                 }
                 (k, o)
             })
             .collect();
         let tombs: BTreeMap<u64, u64> =
-            tombs.into_iter().map(|(k, t)| (k, if t == txg_hint { txg } else { t })).collect();
+            tombs.into_iter().map(|(k, t)| (k, if t == RECEIVING_TXG { txg } else { t })).collect();
         d.partial = None;
         d.created_by_partial = false;
         d.objects = objects.clone();

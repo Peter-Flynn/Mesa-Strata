@@ -42,6 +42,7 @@ const START_LEVEL: i32 = 3;
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const KEEPALIVE_PROBES: u32 = 6;
+const WRITE_STALL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Clone)]
 enum Cipher {
@@ -438,6 +439,10 @@ impl Session {
         sockopt::set_tcp_keepidle(&stream, KEEPALIVE_IDLE).ok();
         sockopt::set_tcp_keepintvl(&stream, KEEPALIVE_INTERVAL).ok();
         sockopt::set_tcp_keepcnt(&stream, KEEPALIVE_PROBES).ok();
+        // Keepalive probes only run while nothing is unacknowledged, and a peer that stops
+        // reading keeps acknowledging. Without a send timeout the writer thread, and the
+        // join in MsgWriter's Drop, would block on such a peer forever.
+        stream.set_write_timeout(Some(WRITE_STALL))?;
         let fw = FrameWriter {
             stream: stream.try_clone()?,
             cipher: cipher.clone(),

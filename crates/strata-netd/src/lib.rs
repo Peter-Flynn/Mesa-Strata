@@ -96,17 +96,17 @@ fn handshake(tcp: TcpStream, z: &Zfsd) -> anyhow::Result<Option<(Session, String
     if !valid_name(&h.client) {
         return reject(RejectReason::UnknownClient, 0);
     }
-    let (version, server_id, nonce, authenticated) =
+    let (version, server_id, nonce, insecure) =
         match z.call(&ZReq::Hello { version: h.version, client: h.client.clone(), auth: h.auth, nonce: h.nonce })? {
-            ZResp::HelloOk { version, server_id, nonce, authenticated } => (version, server_id, nonce, authenticated),
+            ZResp::HelloOk { version, server_id, nonce, insecure } => (version, server_id, nonce, insecure),
             ZResp::Reject { reason, retry_after_ms } => return reject(reason, retry_after_ms),
             other => bail!("unexpected zfsd reply to Hello: {other:?}"),
         };
     let sh = ServerHello { version, server_id, nonce, result: HelloResult::Proceed };
     let sh_bytes = send_hs(&mut s, &Hs::ServerHello(sh))?;
-    if authenticated {
+    if insecure {
         if h.auth != AuthMode::None {
-            bail!("zfsd authenticated a psk client without CPace");
+            bail!("zfsd admitted a psk client without CPace");
         }
         return Ok(Some((Session::plain(tcp, COMPRESS_THREADS)?, h.client)));
     }

@@ -35,7 +35,7 @@ pub enum ZReq {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZResp {
     Ok,
-    HelloOk { version: u16, server_id: [u8; 16], nonce: [u8; 16], authenticated: bool },
+    HelloOk { version: u16, server_id: [u8; 16], nonce: [u8; 16], insecure: bool },
     Reject { reason: RejectReason, retry_after_ms: u32 },
     CpaceB { yb: [u8; 32], tb: [u8; 64] },
     Authenticated { psk: [u8; 32] },
@@ -239,8 +239,8 @@ impl ZResp {
     pub fn encode(&self) -> Result<Box<[u8; LOCAL_MSG]>, Malformed> {
         match self {
             ZResp::Ok => Enc::new(1).finish(),
-            ZResp::HelloOk { version, server_id, nonce, authenticated } => {
-                Enc::new(2).u16(*version).bytes(server_id).bytes(nonce).bool(*authenticated).finish()
+            ZResp::HelloOk { version, server_id, nonce, insecure } => {
+                Enc::new(2).u16(*version).bytes(server_id).bytes(nonce).bool(*insecure).finish()
             }
             ZResp::Reject { reason, retry_after_ms } => {
                 Enc::new(3).u8(reason_to(*reason)).u32(*retry_after_ms).finish()
@@ -279,9 +279,7 @@ impl ZResp {
         let mut d = Dec::new(buf);
         let r = match d.u16()? {
             1 => ZResp::Ok,
-            2 => {
-                ZResp::HelloOk { version: d.u16()?, server_id: d.array()?, nonce: d.array()?, authenticated: d.bool()? }
-            }
+            2 => ZResp::HelloOk { version: d.u16()?, server_id: d.array()?, nonce: d.array()?, insecure: d.bool()? },
             3 => ZResp::Reject { reason: reason_from(d.u8()?)?, retry_after_ms: d.u32()? },
             4 => ZResp::CpaceB { yb: d.array()?, tb: d.array()? },
             5 => ZResp::Authenticated { psk: d.array()? },
@@ -340,7 +338,7 @@ mod tests {
             assert_eq!(ZReq::decode(&r.encode().unwrap()).unwrap(), r);
         }
         let resps = vec![
-            ZResp::HelloOk { version: 1, server_id: [9; 16], nonce: [8; 16], authenticated: true },
+            ZResp::HelloOk { version: 1, server_id: [9; 16], nonce: [8; 16], insecure: true },
             ZResp::Reject { reason: RejectReason::BackingOff, retry_after_ms: 1000 },
             ZResp::CpaceB { yb: [1; 32], tb: [2; 64] },
             ZResp::Authenticated { psk: [4; 32] },

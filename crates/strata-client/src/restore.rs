@@ -114,9 +114,12 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
         eprintln!("{target} is encrypted: run `zfs load-key {target}` and `zfs mount {target}`");
     }
     if o.replace {
-        replace(zfs, ds, &target, o.yes)?;
+        let not_carried = replace(zfs, ds, &target, o.yes)?;
         eprintln!("{ds} now holds {}@{}", o.source, s.name);
         rebase(zfs, net, &o.source, src, s)?;
+        if !not_carried.is_empty() {
+            bail!("{ds} was replaced, but these properties could not be carried over: {}", not_carried.join(", "));
+        }
         return Ok(ds.to_string());
     }
     Ok(target)
@@ -216,11 +219,11 @@ const NOT_CARRIED: &[&str] = &[
 /// `canmount=noauto` so it never mounts over the restored copy at boot, rename it aside,
 /// rename `target` into place, then carry the local properties over (received streams
 /// carry none, so without this a local `mountpoint` would be lost). A failed rename puts
-/// the original back.
-fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<()> {
+/// the original back. Returns the properties that could not be carried over.
+fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<Vec<String>> {
     if !zfs.exists(ds)? {
         zfs.rename(target, ds)?;
-        return Ok(());
+        return Ok(Vec::new());
     }
     let stamp = utc_compact(unix_now());
     let mut old = format!("{ds}-strata-old-{stamp}");
@@ -270,8 +273,5 @@ fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<(
     eprintln!(
         "the previous contents of {ds} are in {old} (canmount=noauto); delete it with `zfs destroy -r {old}` once you no longer need it"
     );
-    if !failed.is_empty() {
-        bail!("{ds} was replaced, but these properties could not be carried over: {}", failed.join(", "));
-    }
-    Ok(())
+    Ok(failed)
 }
