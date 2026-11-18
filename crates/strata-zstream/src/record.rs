@@ -43,7 +43,7 @@ pub const DRR_WRITE_EMBEDDED: u32 = 8;
 pub const DRR_OBJECT_RANGE: u32 = 9;
 pub const DRR_REDACT: u32 = 10;
 
-pub const DMU_BACKUP_MAGIC: u64 = 0x2F5bacbac;
+pub const DMU_BACKUP_MAGIC: u64 = 0x2F5B_ACBAC;
 pub const DMU_SUBSTREAM: u64 = 1;
 
 pub const FEATURE_DEDUP: u64 = 1 << 0;

@@ -251,6 +251,12 @@ impl LocalSock {
     }
 }
 
+impl From<LocalSock> for OwnedFd {
+    fn from(s: LocalSock) -> OwnedFd {
+        s.fd
+    }
+}
+
 impl AsFd for LocalSock {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()

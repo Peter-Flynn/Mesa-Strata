@@ -1,7 +1,21 @@
 [package]
 name = "strata-netd"
+description = "Strata server network daemon: one unprivileged process per connection"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[features]
+fault-injection = ["strata-proto/fault-injection"]
 
 [dependencies]
+anyhow.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+log.workspace = true
+strata-proto.workspace = true
+strata-zstream.workspace = true
+
+[lints]
+workspace = true

@@ -1,7 +1,30 @@
 [package]
 name = "strata-zfsd"
+description = "Strata server ZFS helper (strata-zfsd), dataset-tree setup (strata-init) and admin CLI (strata-server)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[features]
+lzc = ["strata-zfs/lzc"]
+fault-injection = ["strata-proto/fault-injection"]
 
 [dependencies]
+anyhow.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+hex.workspace = true
+log.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-proto.workspace = true
+strata-zfs.workspace = true
+strata-zstream.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

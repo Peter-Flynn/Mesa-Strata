@@ -226,31 +226,25 @@ impl Validator {
     fn header(&mut self, out: &mut Vec<u8>) -> Result<(), StreamError> {
         let h = std::mem::take(&mut self.cur);
         let t = u32_at(&h, 0);
-        if self.summary.is_none() {
-            if t != DRR_BEGIN {
-                return invalid("stream does not start with BEGIN");
-            }
-            self.begin(&h)?;
-            self.ck.update(&h);
-        } else {
+        if let Some(summary) = &self.summary {
             match t {
                 DRR_OBJECT | DRR_FREEOBJECTS | DRR_WRITE | DRR_FREE | DRR_END | DRR_SPILL | DRR_WRITE_EMBEDDED
                 | DRR_OBJECT_RANGE => {}
                 _ => return invalid(format!("record type {} ({t}) is refused", type_name(t))),
             }
-            if t == DRR_OBJECT_RANGE && self.summary.as_ref().unwrap().features & FEATURE_RAW == 0 {
+            if t == DRR_OBJECT_RANGE && summary.features & FEATURE_RAW == 0 {
                 return invalid("OBJECT_RANGE in a non-raw stream");
             }
             if u32_at(&h, 4) != 0 {
                 return invalid("payloadlen set on a non-BEGIN record");
             }
+            let toguid = summary.toguid;
             let before = self.ck;
             self.ck.update(&h[..CKSUM_OFF]);
             if h[CKSUM_OFF..] != self.ck.to_bytes() {
                 return Err(StreamError::Checksum(self.offset));
             }
             self.ck.update(&h[CKSUM_OFF..]);
-            let toguid = self.summary.as_ref().unwrap().toguid;
             if let Some(off) = toguid_offset(t)
                 && u64_at(&h, off) != toguid
             {
@@ -260,6 +254,12 @@ impl Validator {
                 return Err(StreamError::Checksum(self.offset));
             }
             out.append(&mut self.pending);
+        } else {
+            if t != DRR_BEGIN {
+                return invalid("stream does not start with BEGIN");
+            }
+            self.begin(&h)?;
+            self.ck.update(&h);
         }
         self.offset += HEADER as u64;
         if t == DRR_END {

@@ -1,7 +1,33 @@
 [package]
 name = "strata-client"
+description = "Strata NixOS client: backup (ZFS half), network half, list and restore CLI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "strata"
+path = "src/main.rs"
+
+[features]
+lzc = ["strata-zfs/lzc"]
+fault-injection = ["strata-proto/fault-injection"]
 
 [dependencies]
+anyhow.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+log.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-proto.workspace = true
+strata-zfs.workspace = true
+strata-zstream.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

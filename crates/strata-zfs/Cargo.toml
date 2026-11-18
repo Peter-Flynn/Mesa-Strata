@@ -1,7 +1,28 @@
 [package]
 name = "strata-zfs"
+description = "ZFS operations behind one trait: libzfs_core and the zfs CLI for real pools, and a file-backed fake for sandbox tests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Links libzfs_core and libnvpair. Without it the real backend's hot-path calls return
+# `ZfsError::Unsupported`; tests use the fake.
+lzc = []
 
 [dependencies]
+log.workspace = true
+postcard.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rustix.workspace = true
+serde.workspace = true
+strata-zstream.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
