@@ -1,0 +1,30 @@
+[package]
+name = "strata-proto"
+description = "Strata wire protocol: framing, messages, CPace + Noise handshake, zstd batches, local fixed-size IPC"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+fault-injection = []
+
+[dependencies]
+argon2.workspace = true
+curve25519-dalek.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+hmac.workspace = true
+log.workspace = true
+postcard.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+sha2.workspace = true
+snow.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+zstd.workspace = true
+
+[lints]
+workspace = true

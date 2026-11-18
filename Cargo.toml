@@ -1,0 +1,61 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/strata-proto",
+    "crates/strata-zstream",
+    "crates/strata-zfs",
+    "crates/strata-zfsd",
+    "crates/strata-netd",
+    "crates/strata-client",
+    "crates/strata-e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+
+[workspace.dependencies]
+strata-proto = { path = "crates/strata-proto" }
+strata-zstream = { path = "crates/strata-zstream" }
+strata-zfs = { path = "crates/strata-zfs" }
+strata-zfsd = { path = "crates/strata-zfsd" }
+strata-netd = { path = "crates/strata-netd" }
+strata-client = { path = "crates/strata-client" }
+
+anyhow = "1"
+argon2 = "0.5"
+clap = { version = "4", features = ["derive"] }
+curve25519-dalek = "4"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+flate2 = "1"
+getrandom = "0.3"
+hex = "0.4"
+hmac = "0.12"
+libc = "0.2"
+log = "0.4"
+postcard = { version = "1", features = ["alloc"] }
+rustix = { version = "1", features = ["net", "fs", "pipe", "process", "param", "system"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1"
+sha2 = "0.10"
+snow = { version = "0.10", features = ["ring-accelerated"] }
+subtle = "2"
+tempfile = "3"
+thiserror = "2"
+zstd = "0.13"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
