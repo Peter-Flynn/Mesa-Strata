@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use strata_proto::fault;
 use strata_proto::msg::{ResumePoint, SourceKind};
-use strata_proto::names::utc_compact;
+use strata_proto::names::{parse_server_snapshot_name, utc_compact};
 use strata_zfs::{Bookmark, DsType, SendFlags, Snap, Zfs};
 
 use crate::config::{SourceConfig, glob};
@@ -166,7 +166,10 @@ impl Ctx<'_> {
             if Some(s.guid) == keep_guid {
                 continue;
             }
-            if self.src.create_snapshots && is_own_snapshot(self.source, &s.name) {
+            // A server-named snapshot here is what a restore received; once its cursor
+            // exists, it is as disposable as the client's own snapshots.
+            let restored = parse_server_snapshot_name(&s.name).is_some() && Some(s.guid) == base.map(|b| b.guid);
+            if restored || (self.src.create_snapshots && is_own_snapshot(self.source, &s.name)) {
                 for (n, e) in self.zfs.destroy_snapshots(std::slice::from_ref(&full))? {
                     log::warn!("could not destroy {n}: {e}");
                 }

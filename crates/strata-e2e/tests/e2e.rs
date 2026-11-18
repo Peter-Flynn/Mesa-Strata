@@ -296,28 +296,45 @@ impl World {
     }
 
     fn server_snaps(&self) -> anyhow::Result<Vec<strata_zfs::Snap>> {
-        let set = strata_zfsd::ops::SourceSet::load(&self.server, "tank/strata/nas/ds", "home")?;
-        Ok(set.snaps.into_iter().map(|(_, s)| s).collect())
+        Ok(self.server_set()?.snaps.into_iter().map(|(_, s)| s).collect())
+    }
+
+    fn server_set(&self) -> anyhow::Result<strata_zfsd::ops::SourceSet> {
+        Ok(strata_zfsd::ops::SourceSet::load(&self.server, "tank/strata/nas/ds", "home")?)
     }
 
     /// Checks the invariants every finished backup must leave behind.
     fn check_converged(&self) -> anyhow::Result<()> {
-        let snaps = self.server_snaps()?;
-        let head = snaps.last().context("server has no snapshot")?;
+        let set = self.server_set()?;
+        let (head_ds, head) = set.head().context("server has no snapshot")?;
         let live = self.client.content("rpool/home")?;
-        let backed = self.server.content(&format!("{}@{}", self.server_ds(), head.name))?;
+        let backed = self.server.content(&format!("{head_ds}@{}", head.name))?;
         ensure!(live == backed, "server head {} differs from the client's data", head.name);
         let cursors = self.client.bookmarks("rpool/home")?;
         ensure!(cursors.len() == 1, "expected one cursor, found {:?}", cursors);
         ensure!(cursors[0].guid == head.guid, "cursor is not at the server head");
         let own = self.client.snapshots("rpool/home", &[])?;
         ensure!(own.is_empty(), "client kept snapshots: {:?}", own.iter().map(|s| &s.name).collect::<Vec<_>>());
-        for s in &snaps {
-            let holds = self.server.holds(&format!("{}@{}", self.server_ds(), s.name))?;
+        for (ds, s) in &set.snaps {
+            let holds = self.server.holds(&format!("{ds}@{}", s.name))?;
             let want: Vec<String> = if s.name == head.name { vec!["strata-base".into()] } else { vec![] };
-            ensure!(holds == want, "{} holds {:?}", s.name, holds);
+            ensure!(holds == want, "{ds}@{} holds {:?}", s.name, holds);
         }
-        ensure!(!self.server.has_partial(self.server_ds())?, "partial receive left on the server");
+        for m in &set.members {
+            ensure!(!self.server.has_partial(m)?, "partial receive left on {m}");
+        }
+        ensure!(self.server.get_prop(head_ds, "origin")?.is_none(), "head dataset {head_ds} is still a clone");
+        ensure!(
+            self.server.get_prop("tank/strata/nas/ds", "strata:rebase:home")?.is_none(),
+            "rebase marker left behind"
+        );
+        Ok(())
+    }
+
+    /// Restores `snapshot` over rpool/home through a fresh target, which records a rebase.
+    fn replace_with(&self, snapshot: &str, target: &str) -> anyhow::Result<()> {
+        let (st, _, err) = self.client_cmd("nas.json", &["restore", "home", snapshot, "--target", target, "--replace"])?;
+        ensure!(st.success(), "restore --replace {snapshot}: {err}");
         Ok(())
     }
 }
@@ -536,12 +553,13 @@ fn t_busy_and_one_session_per_source() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fault_points(w: &mut World) -> anyhow::Result<Vec<String>> {
+fn fault_points(w: &mut World, prepare: &dyn Fn(&World, usize) -> anyhow::Result<()>) -> anyhow::Result<Vec<String>> {
     // The client's network half drops to `nobody` when the tests run as root, so the
     // trace file lives outside the 0700 temp dir and is world-writable.
     let trace = std::env::temp_dir().join(format!("strata-e2e-trace-{}", std::process::id()));
     std::fs::write(&trace, "")?;
     std::fs::set_permissions(&trace, std::os::unix::fs::PermissionsExt::from_mode(0o666))?;
+    prepare(w, 1000)?;
     w.power_cut();
     w.set_env(&[("STRATA_FAULT_TRACE", trace.to_str().unwrap())])?;
     w.start_zfsd()?;
@@ -554,14 +572,15 @@ fn fault_points(w: &mut World) -> anyhow::Result<Vec<String>> {
     Ok(text.lines().filter(|l| seen.insert(l.to_string())).map(str::to_string).collect())
 }
 
-fn t_crash_at_every_point() -> anyhow::Result<()> {
-    let mut w = World::new()?;
-    fill(&w.client, "rpool/home", 9, 6, 300_000)?;
-    w.backup()?;
-    let points = fault_points(&mut w)?;
+fn crash_loop(w: &mut World, prepare: &dyn Fn(&World, usize) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    let points = fault_points(w, prepare)?;
     ensure!(points.len() >= 8, "too few fault points traced: {points:?}");
     let mut results = BTreeMap::new();
     for (i, p) in points.iter().enumerate() {
+        w.power_cut();
+        w.set_env(&[])?;
+        w.start_zfsd()?;
+        prepare(w, i)?;
         w.power_cut();
         w.set_env(&[("STRATA_FAULT", p)])?;
         w.start_zfsd()?;
@@ -572,12 +591,112 @@ fn t_crash_at_every_point() -> anyhow::Result<()> {
         w.start_zfsd()?;
         w.client.write_object("rpool/home", 2, format!("change {i} after crash at {p}").as_bytes())?;
         let r = w.backup().and_then(|_| w.check_converged());
-        results.insert(p.clone(), (st.success(), r.as_ref().map_err(|e| format!("{e:#}")).err()));
+        results.insert(p.clone(), st.success());
         r.with_context(|| format!("did not converge after a crash at {p}"))?;
     }
-    for (p, (ok, _)) in &results {
+    for (p, ok) in &results {
         eprintln!("    crash at {p:<28} first run {}", if *ok { "completed" } else { "died" });
     }
+    Ok(())
+}
+
+fn t_crash_at_every_point() -> anyhow::Result<()> {
+    let mut w = World::new()?;
+    fill(&w.client, "rpool/home", 9, 6, 300_000)?;
+    w.backup()?;
+    crash_loop(&mut w, &|_, _| Ok(()))
+}
+
+/// Every crash point again, during the backup that follows a rebase onto the
+/// second-newest snapshot.
+fn t_crash_during_rebase() -> anyhow::Result<()> {
+    let mut w = World::new()?;
+    fill(&w.client, "rpool/home", 10, 4, 100_000)?;
+    w.backup()?;
+    w.client.write_object("rpool/home", 3, b"second")?;
+    w.backup()?;
+    crash_loop(&mut w, &|w, i| {
+        let snaps = w.server_snaps()?;
+        let older = &snaps[snaps.len() - 2];
+        w.replace_with(&older.name, &format!("rpool/rb{i}"))?;
+        ensure!(w.server.get_prop("tank/strata/nas/ds", "strata:rebase:home")?.is_some(), "no rebase recorded");
+        Ok(())
+    })
+}
+
+/// The client dies inside `restore --replace` after the server recorded the rebase, before
+/// and after it bookmarked S; the next backup must still land on S's clone.
+fn t_crash_inside_replace() -> anyhow::Result<()> {
+    for (i, point) in ["client.rebase.recorded", "client.rebase.bookmarked"].iter().enumerate() {
+        let mut w = World::new()?;
+        fill(&w.client, "rpool/home", 11, 2, 1000)?;
+        let first = w.backup()?;
+        w.client.write_object("rpool/home", 1, b"newer")?;
+        w.backup()?;
+        w.set_env(&[("STRATA_FAULT", point)])?;
+        let (st, _, _) = w.client_cmd("nas.json", &["restore", "home", &first, "--target", &format!("rpool/rb{i}"), "--replace"])?;
+        ensure!(!st.success(), "restore should have died at {point}");
+        w.power_cut();
+        w.set_env(&[])?;
+        w.start_zfsd()?;
+        w.client.write_object("rpool/home", 2, b"after")?;
+        w.backup().with_context(|| format!("backup after a crash at {point}"))?;
+        w.check_converged().with_context(|| format!("after a crash at {point}"))?;
+        ensure!(w.server.exists("tank/strata/nas/ds/home.g3")?, "rebased after a crash at {point}");
+    }
+    Ok(())
+}
+
+fn t_rebase_after_replace() -> anyhow::Result<()> {
+    let w = World::with(|c| {
+        c["defaults"]["keep"] = serde_json::json!(3);
+        c["defaults"]["dailies"] = serde_json::json!(0);
+    })?;
+    let mut names = Vec::new();
+    for i in 1..=4u8 {
+        w.client.write_object("rpool/home", 1, &[i; 1000])?;
+        names.push(w.backup()?);
+    }
+    w.replace_with(&names[1], "rpool/rb")?;
+    ensure!(w.client.content("rpool/home")?[&1] == vec![2u8; 1000], "replaced with g2's data");
+    let s = w.server_set()?.find(&names[1]).context("S missing")?.clone();
+    let cursors = w.client.bookmarks("rpool/home")?;
+    ensure!(cursors.len() == 1 && cursors[0].guid == s.1.guid, "cursor at S: {cursors:?}");
+    ensure!(w.client.snapshots("rpool/home", &[])?.is_empty(), "local S destroyed");
+    ensure!(w.server.holds(&format!("{}@{}", s.0, s.1.name))?.contains(&"strata-rebase".to_string()));
+
+    w.client.write_object("rpool/home", 2, b"after the rebase")?;
+    let g5 = w.backup()?;
+    ensure!(g5.ends_with("-g5"), "{g5}");
+    w.check_converged()?;
+    ensure!(w.server.exists("tank/strata/nas/ds/home.g5")?, "rebased into a sibling");
+    let origin = w.server.get_prop("tank/strata/nas/ds/home", "origin")?;
+    ensure!(origin == Some(format!("tank/strata/nas/ds/home.g5@{}", names[1])), "promoted; old origin {origin:?}");
+    ensure!(w.server.holds(&format!("tank/strata/nas/ds/home.g5@{}", names[1]))?.is_empty(), "S released");
+
+    // keep = 3: g6 prunes g3 and g7 prunes g4, the abandoned branch's last snapshot,
+    // which leaves the old dataset empty.
+    w.client.write_object("rpool/home", 3, b"g6")?;
+    w.backup()?;
+    ensure!(w.server.exists("tank/strata/nas/ds/home")?, "abandoned branch still holds g4");
+    w.client.write_object("rpool/home", 3, b"g7")?;
+    w.backup()?;
+    w.check_converged()?;
+    ensure!(!w.server.exists("tank/strata/nas/ds/home")?, "abandoned branch's dataset destroyed once its snapshots were pruned");
+    let (st, out, err) = w.client_cmd("nas.json", &["sources"])?;
+    ensure!(st.success() && out.matches("home").count() == 1, "sources: {out}{err}");
+    let latest = w.server_snaps()?.last().unwrap().name.clone();
+    let (st, _, err) = w.client_cmd("nas.json", &["restore", "home", &latest, "--target", "rpool/check"])?;
+    ensure!(st.success(), "{err}");
+    ensure!(w.client.content("rpool/check")? == w.client.content("rpool/home")?);
+
+    w.replace_with(&latest, "rpool/rb-head")?;
+    ensure!(w.server.get_prop("tank/strata/nas/ds", "strata:rebase:home")?.is_none(), "rebase onto the head is a no-op");
+    w.client.write_object("rpool/home", 4, b"g8")?;
+    w.backup()?;
+    w.check_converged()?;
+    let members = w.server_set()?.members;
+    ensure!(members == vec!["tank/strata/nas/ds/home.g5".to_string()], "no new sibling: {members:?}");
     Ok(())
 }
 
@@ -606,7 +725,10 @@ fn main() {
         ("restore_errors", t_restore_errors),
         ("resume_after_interrupted_stream", t_resume_after_interrupted_stream),
         ("busy_and_one_session_per_source", t_busy_and_one_session_per_source),
+        ("rebase_after_replace", t_rebase_after_replace),
+        ("crash_inside_replace", t_crash_inside_replace),
         ("crash_at_every_point", t_crash_at_every_point),
+        ("crash_during_rebase", t_crash_during_rebase),
     ];
     let filter: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let mut failed = 0;

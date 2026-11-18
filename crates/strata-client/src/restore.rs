@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::io::BufRead;
 
 use anyhow::{Context, bail};
-use strata_proto::msg::SnapshotInfo;
+use strata_proto::msg::{ErrorCode, SnapshotInfo};
 use strata_proto::names::{utc_compact, utc_readable};
 use strata_zfs::{DsType, RecvOpts, Zfs};
 
@@ -86,27 +86,66 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
             bail!("{ds} has child datasets ({}); --replace would move them along with it. Restore into a separate --target instead", kids.join(", "));
         }
     }
-    let mut origin = None;
-    let mut from = None;
+    let mut base = None;
     if !o.full && zfs.exists(ds)? {
         let local = zfs.snapshots(ds, &[])?;
         let older = snaps.iter().take_while(|x| x.name != s.name);
-        if let Some((srv, loc)) =
-            older.filter_map(|x| local.iter().find(|l| l.guid == x.guid).map(|l| (x, l))).last()
-        {
-            log::info!("restoring incrementally from {}@{} (= server {})", ds, loc.name, srv.name);
-            origin = Some(format!("{ds}@{}", loc.name));
-            from = Some(srv);
-        }
+        base = older
+            .filter_map(|x| local.iter().find(|l| l.guid == x.guid).map(|l| (x, format!("{ds}@{}", l.name))))
+            .last();
+    }
+    let mut result = receive(zfs, net, &o.source, src, &target, s, base)?;
+    if let Err(Refused::NotAncestor) = result {
+        log::info!("the shared snapshot is not an ancestor of {}; restoring the full snapshot", s.name);
+        result = receive(zfs, net, &o.source, src, &target, s, None)?;
+    }
+    match result {
+        Ok(()) => {}
+        Err(Refused::NotAncestor) => bail!("restore failed: the server refused the incremental base"),
+        Err(Refused::Other(e)) => bail!("restore failed: {e}"),
+    }
+    eprintln!("restored {}@{} into {target}", o.source, s.name);
+    if src.raw {
+        eprintln!("{target} is encrypted: run `zfs load-key {target}` and `zfs mount {target}`");
+    }
+    if o.replace {
+        replace(zfs, ds, &target, o.yes)?;
+        eprintln!("{ds} now holds {}@{}", o.source, s.name);
+        rebase(zfs, net, &o.source, src, s)?;
+        return Ok(ds.to_string());
+    }
+    Ok(target)
+}
+
+enum Refused {
+    NotAncestor,
+    Other(String),
+}
+
+/// One receive of `s` into `target`, incrementally as a clone of `base`'s local copy when
+/// given. The outer error is a local failure; the inner one is the server's or the
+/// stream's refusal.
+fn receive(
+    zfs: &dyn Zfs,
+    net: &NetClient,
+    source: &str,
+    src: &SourceConfig,
+    target: &str,
+    s: &SnapshotInfo,
+    base: Option<(&SnapshotInfo, String)>,
+) -> anyhow::Result<Result<(), Refused>> {
+    if let Some((srv, loc)) = &base {
+        log::info!("restoring incrementally from {loc} (= server {})", srv.name);
     }
     // A raw stream arrives encrypted with its key unloaded, so it can't be mounted yet.
-    let rx = zfs.receive(&target, &RecvOpts { resumable: false, no_mount: src.raw, props: Vec::new(), origin })?;
+    let opts = RecvOpts { resumable: false, no_mount: src.raw, props: Vec::new(), origin: base.as_ref().map(|b| b.1.clone()) };
+    let rx = zfs.receive(target, &opts)?;
     net.send(
         &CReq::Restore {
-            source: o.source.clone(),
+            source: source.to_string(),
             snapshot: s.name.clone(),
-            from: from.map(|f| f.name.clone()),
-            fromguid: from.map_or(0, |f| f.guid),
+            from: base.as_ref().map(|b| b.0.name.clone()),
+            fromguid: base.as_ref().map_or(0, |b| b.0.guid),
             toguid: s.guid,
         },
         Some(&rx.stdin),
@@ -118,20 +157,38 @@ pub fn restore(zfs: &dyn Zfs, net: &NetClient, src: &SourceConfig, o: &RestoreOp
     let recv = rx.job.wait();
     match reply {
         CResp::Restored => {}
-        CResp::Error { code, message } => bail!("restore failed: {code:?}: {message}"),
+        CResp::Error { code: ErrorCode::Conflict, .. } if base.is_some() => return Ok(Err(Refused::NotAncestor)),
+        CResp::Error { code, message } => return Ok(Err(Refused::Other(format!("{code:?}: {message}")))),
         other => bail!("unexpected reply {other:?}"),
     }
     recv.context("zfs receive")?;
-    eprintln!("restored {}@{} into {target}", o.source, s.name);
-    if src.raw {
-        eprintln!("{target} is encrypted: run `zfs load-key {target}` and `zfs mount {target}`");
+    Ok(Ok(()))
+}
+
+/// After `--replace`, the source's data is snapshot `s`. The server records the rebase
+/// first and the cursor bookmark comes second: if the client stops in between, `s` is
+/// still a local snapshot with the GUID the server reports, and the next backup bookmarks
+/// it itself. The local copy of `s` goes last, because the client keeps no snapshots.
+fn rebase(zfs: &dyn Zfs, net: &NetClient, source: &str, src: &SourceConfig, s: &SnapshotInfo) -> anyhow::Result<()> {
+    match net.call(&CReq::Rebase { source: source.to_string(), snapshot: s.name.clone() })? {
+        CResp::Ok => {}
+        CResp::Error { code, message } => bail!(
+            "{} was replaced, but the server didn't record the rebase ({code:?}: {message}); the next backup of {source} \
+             fails until a restore with --replace succeeds",
+            src.dataset
+        ),
+        other => bail!("unexpected reply to Rebase: {other:?}"),
     }
-    if o.replace {
-        replace(zfs, ds, &target, o.yes)?;
-        eprintln!("{ds} now holds {}@{}", o.source, s.name);
-        return Ok(ds.to_string());
+    strata_proto::fault::point("client.rebase.recorded");
+    let ds = src.dataset.as_str();
+    let local = zfs.snapshots(ds, &[])?.into_iter().find(|l| l.guid == s.guid).context("restored snapshot vanished")?;
+    let full = format!("{ds}@{}", local.name);
+    zfs.bookmark(&full, &format!("{ds}#{}", crate::backup::cursor_name(source, s.guid)))?;
+    strata_proto::fault::point("client.rebase.bookmarked");
+    for (n, e) in zfs.destroy_snapshots(std::slice::from_ref(&full))? {
+        log::warn!("could not destroy {n}: {e}");
     }
-    Ok(target)
+    Ok(())
 }
 
 /// Properties that can't be set after creation, or that the restored stream already
@@ -159,7 +216,13 @@ fn replace(zfs: &dyn Zfs, ds: &str, target: &str, yes: bool) -> anyhow::Result<(
         zfs.rename(target, ds)?;
         return Ok(());
     }
-    let old = format!("{ds}-strata-old-{}", utc_compact(now()));
+    let stamp = utc_compact(now());
+    let mut old = format!("{ds}-strata-old-{stamp}");
+    let mut n = 1;
+    while zfs.exists(&old)? {
+        n += 1;
+        old = format!("{ds}-strata-old-{stamp}-{n}");
+    }
     if !yes {
         confirm(&format!("Replace {ds} with the restored copy? {ds} itself is kept as {old}."), ds)?;
     }

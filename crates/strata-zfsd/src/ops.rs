@@ -10,8 +10,8 @@
 //!    head, so the client's cursor check passes.
 //! 2. The next backup's stream is received as a clone of S into a new sibling.
 //! 3. Once the set's generation exceeds the recorded one, the receive has landed:
-//!    `finalize_rebase` promotes the head's dataset if it is still a clone (moving S and
-//!    everything before it into the new sibling), releases S and clears the property.
+//!    `finalize_rebase` promotes the head's dataset until it is no longer a clone (moving
+//!    S and everything before it into the new sibling), releases S and clears the property.
 //!    Every step is idempotent, and `Begin` runs it too, so a crash anywhere converges.
 //! 4. The old dataset keeps only the abandoned branch (the snapshots after S). Retention
 //!    prunes those like any others, and a member left with no snapshots is destroyed.
@@ -196,11 +196,17 @@ pub fn finalize_rebase(zfs: &dyn Zfs, client_ds: &str, source: &str) -> anyhow::
             return Ok(Some(base.clone()));
         }
         log::warn!("{client_ds}/{source}: rebase base {guid:#x} is gone; cancelling the rebase");
-    } else if let Some((head_ds, _)) = set.head()
-        && zfs.get_prop(head_ds, "origin")?.is_some()
-    {
-        zfs.promote(head_ds)?;
-        fault::point("zfsd.rebase.promoted");
+    } else if let Some((head_ds, _)) = set.head() {
+        // When S lives in a dataset that is itself a clone (an older abandoned branch),
+        // one promotion leaves the new sibling a clone of S's grand-origin; promoting
+        // until no origin is left gives it the whole history.
+        for _ in 0..64 {
+            if zfs.get_prop(head_ds, "origin")?.is_none() {
+                break;
+            }
+            zfs.promote(head_ds)?;
+            fault::point("zfsd.rebase.promoted");
+        }
     }
     if let Some((ds, s)) = SourceSet::load(zfs, client_ds, source)?.find_guid(guid) {
         release_if_held(zfs, &full(ds, &s.name), REBASE_HOLD)?;

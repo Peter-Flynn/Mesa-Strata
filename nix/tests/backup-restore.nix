@@ -210,6 +210,25 @@ in
         assert "home" in out and "ok" in out, out
         server.succeed("strata-server check-stale")
 
+    with subtest("rebase onto an older snapshot, then the abandoned branch goes"):
+        names = client.succeed("strata snapshots home | awk 'NR > 1 {print $1}'").split()
+        s = names[-2]
+        client.succeed(f"strata restore home {s} --target rpool/home-rb --replace --yes")
+        assert server.succeed("zfs get -H -o value strata:rebase:home tank/strata/client/ds").strip() != "-"
+        client.succeed("echo rebased > /rpool/home/c", "systemctl start strata-backup@home.service")
+        head = client.succeed("strata snapshots home | awk 'END {print $1}'").strip()
+        sib = "tank/strata/client/ds/home.g" + head.rsplit("-g", 1)[1]
+        assert server.succeed(f"zfs get -H -o value origin {sib}").strip() == "-"
+        assert server.succeed("zfs get -H -o value origin tank/strata/client/ds/home").strip() == f"{sib}@{s}"
+        assert server.succeed("zfs get -H -o value strata:rebase:home tank/strata/client/ds").strip() == "-"
+        client.succeed("strata restore home latest --target rpool/home-check", "diff -r /rpool/home /rpool/home-check")
+        # keep = 3: the next backups prune the abandoned branch's snapshot, and then its dataset.
+        for i in range(3):
+            client.succeed(f"echo {i} >> /rpool/home/c", "systemctl start strata-backup@home.service")
+        server.fail("zfs list tank/strata/client/ds/home")
+        out = client.succeed("strata sources")
+        assert out.count("home") == 1, out
+
     with subtest("privilege split"):
         assert server.succeed("systemctl show -p User --value strata-zfsd").strip() == "strata-zfs"
         server.succeed("systemctl show -p DynamicUser --value strata-netd@0.service | grep -q yes")
